@@ -27,34 +27,6 @@ All core functionality has been implemented, tested, and verified. The system is
 
 ## Architecture Overview
 
-# Image Similarity Search Microservice
-
-## Overview
-This repository contains a production-ready image similarity search microservice designed to ingest, index, and retrieve visually similar graphical assets at scale. The system is built to handle more than 300,000 images stored in an S3-compatible object storage and integrates seamlessly with an existing Order Management System (OMS).
-
-The service automatically processes new images, generates vector embeddings, stores them in a vector-enabled database, and exposes a search API that returns similar images along with similarity scores.
-
----
-
-## System Status
-**Status:** 🟢 Production Ready (Code Complete)  
-**Last Updated:** Feb 16, 2026
-
-All core functionality has been implemented, tested, and verified. The system is cleared for full-scale ingestion.
-
----
-
-## Key Features
-- Vector-based image similarity search
-- Supports PNG, JPEG, PDF, and AI (Adobe Illustrator) formats
-- Automatic ingestion from MinIO (S3-compatible storage)
-- Persistent vector storage for restart safety
-- Dockerized microservice architecture
-- Designed for high-throughput ingestion and search workloads
-
----
-
-## Architecture Overview
 OMS → MinIO (S3)
 ↓
 Ingestion Workers
