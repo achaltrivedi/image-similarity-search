@@ -154,15 +154,28 @@ async def search_image(
             
             image_url = None
             thumbnail_url = None
+            download_url = None
             try:
-                # 1. URL for original file (download/view)
+                # 1. URL for original file (view)
                 image_url = s3.generate_presigned_url(
                     'get_object',
                     Params={'Bucket': BUCKET_NAME, 'Key': key},
                     ExpiresIn=3600
                 )
                 
-                # 2. URL for thumbnail (display)
+                # 2. URL for download (forces browser to download instead of display)
+                filename = key.split('/')[-1]  # Extract filename from path
+                download_url = s3.generate_presigned_url(
+                    'get_object',
+                    Params={
+                        'Bucket': BUCKET_NAME, 
+                        'Key': key,
+                        'ResponseContentDisposition': f'attachment; filename="{filename}"'
+                    },
+                    ExpiresIn=3600
+                )
+                
+                # 3. URL for thumbnail (display)
                 if key.lower().endswith((".ai", ".pdf")):
                     thumb_key = f".thumbnails/{key}.png"
                     thumbnail_url = s3.generate_presigned_url(
@@ -181,7 +194,8 @@ async def search_image(
                 "image_key": key,
                 "similarity": float(similarity),
                 "image_url": image_url,
-                "thumbnail_url": thumbnail_url
+                "thumbnail_url": thumbnail_url,
+                "download_url": download_url
             })
     finally:
         db.close()
@@ -300,6 +314,16 @@ def home():
                             const p = document.createElement('div'); 
                             p.innerText = name + ' — ' + (r.similarity*100).toFixed(2) + '%';
                             div.appendChild(p); 
+                            
+                            // 3. Download Button
+                            if (r.download_url) {
+                                const downloadBtn = document.createElement('a');
+                                downloadBtn.href = r.download_url;
+                                downloadBtn.innerText = '⬇️ Download';
+                                downloadBtn.style.cssText = 'display:inline-block; margin-top:8px; padding:6px 12px; background:#007bff; color:#fff; text-decoration:none; border-radius:4px; font-size:12px;';
+                                div.appendChild(downloadBtn);
+                            }
+                            
                             container.appendChild(div);
                         });
                     }
