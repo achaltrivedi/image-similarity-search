@@ -1,0 +1,51 @@
+{
+    "EventName": "s3:ObjectCreated:Put",
+    "Key": "img1.png",
+    "Records": [
+        {
+            "eventVersion": "2.0",
+            "eventSource": "minio:s3",
+            "awsRegion": "us-east-1",
+            "eventTime": "2023-10-25T12:00:00.000Z",
+            "eventName": "s3:ObjectCreated:Put",
+            "userIdentity": {
+                "principalId": "minio"
+            },
+            "requestParameters": {
+                "principalId": "minio",
+                "region": "us-east-1",
+                "sourceIPAddress": "127.0.0.1"
+            },
+            "responseElements": {
+                "x-amz-request-id": "178F",
+                "x-minio-deployment-id": "e368"
+            },
+            "s3": {
+                "s3SchemaVersion": "1.0",
+                "configurationId": "Config",
+                "bucket": {
+                    "name": "images",
+                    "ownerIdentity": {
+                        "principalId": "minio"
+                    },
+                    "arn": "arn:aws:s3:::images"
+                },
+                "object": {
+                    "key": "images/test_mock_image.jpg",
+                    "size": 1024,
+                    "eTag": "d41d8cd98f00b204e9800998ecf8427e",
+                    "contentType": "image/jpeg",
+                    "userMetadata": {
+                        "content-type": "image/jpeg"
+                    },
+                    "sequencer": "178F"
+                }
+            },
+            "source": {
+                "host": "127.0.0.1",
+                "port": "",
+                "userAgent": "MinIO (Windows; x64) minio-go/v7.0.63"
+            }
+        }
+    ]
+}

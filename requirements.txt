@@ -1,0 +1,27 @@
+# Core ML / DL
+torch>=2.0.0
+transformers>=4.36.0
+
+# Image processing
+Pillow>=10.0.0
+pypdfium2>=4.0.0
+
+# API layer
+fastapi>=0.110.0
+uvicorn>=0.27.0
+python-multipart>=0.0.9
+python-dotenv>=1.0.0
+
+# Data + DB
+numpy>=1.24.0
+sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.0
+pgvector>=0.2.0
+boto3>=1.26.0
+
+# Background queue
+redis>=5.0.0
+rq>=1.16.0
+
+# Legacy dependency kept for compatibility with older local scripts
+faiss-cpu>=1.7.4

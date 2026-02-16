@@ -1,0 +1,63 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: ingest_queue
+    ports:
+      - "6379:6379"
+    restart: always
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: vector_db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: always
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  worker:
+    build: .
+    image: image-similarity-worker
+    depends_on:
+      - redis
+      - db
+      # - minio  <-- Removed dependency on internal minio
+    deploy:
+      replicas: 4
+    environment:
+      # Override .env for Docker internal networking
+      REDIS_URL: redis://redis:6379/0
+      POSTGRES_HOST: db
+
+      # CONNECT TO HOST MINIO (User's existing server on 9001)
+      # host.docker.internal resolves to the Windows host machine
+      MINIO_ENDPOINT: "http://host.docker.internal:9000"
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET_NAME: ${MINIO_BUCKET_NAME}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_PORT: 5432
+      INGEST_QUEUE_BACKEND: ${INGEST_QUEUE_BACKEND}
+    command: python tools/run_worker.py
+    restart: always
+
+volumes:
+  postgres_data: # minio_data: # Removed as we use external S3

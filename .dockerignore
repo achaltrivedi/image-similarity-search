@@ -1,0 +1,11 @@
+venv/
+__pycache__/
+.git/
+.vscode/
+node_modules/
+minio_data/
+postgres_data/
+storage/
+images/
+*.pyc
+.env
