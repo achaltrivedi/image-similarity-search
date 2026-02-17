@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react'
-import { Search } from 'lucide-react'
+import { Upload, Search, FileImage } from 'lucide-react'
 import { Button } from './ui/button'
 
 export default function SearchBox({ onSearch, loading }) {
@@ -44,16 +44,16 @@ export default function SearchBox({ onSearch, loading }) {
     }
 
     return (
-        <div className="bg-white/10 backdrop-blur-lg rounded-2xl p-8 shadow-2xl">
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-8">
             <div
                 className={`
-          border-4 border-dashed rounded-xl p-12
-          transition-all duration-200 cursor-pointer
-          ${dragActive
-                        ? 'border-white bg-white/20'
-                        : 'border-white/40 hover:border-white/60 hover:bg-white/5'
+                    border-2 border-dashed rounded-lg p-12
+                    transition-all duration-200 cursor-pointer
+                    ${dragActive
+                        ? 'border-blue-500 bg-blue-50'
+                        : 'border-gray-300 hover:border-blue-400 hover:bg-gray-50'
                     }
-        `}
+                `}
                 onDragEnter={handleDrag}
                 onDragLeave={handleDrag}
                 onDragOver={handleDrag}
@@ -69,12 +69,26 @@ export default function SearchBox({ onSearch, loading }) {
                 />
 
                 <div className="text-center">
-                    <div className="text-6xl mb-4">📸</div>
-                    <p className="text-white text-xl font-semibold mb-2">
-                        {selectedFile ? selectedFile.name : 'Drop your image here'}
+                    <div className="mx-auto w-16 h-16 mb-4 flex items-center justify-center rounded-full bg-gray-100">
+                        <Upload className="w-8 h-8 text-gray-600" />
+                    </div>
+
+                    {selectedFile ? (
+                        <div className="flex items-center justify-center gap-2 mb-2">
+                            <FileImage className="w-5 h-5 text-blue-600" />
+                            <p className="text-gray-900 font-medium">{selectedFile.name}</p>
+                        </div>
+                    ) : (
+                        <p className="text-gray-900 font-semibold text-lg mb-2">
+                            Upload Image to Search
+                        </p>
+                    )}
+
+                    <p className="text-gray-500 text-sm">
+                        Drag and drop or click to browse
                     </p>
-                    <p className="text-white/60">
-                        or click to browse (JPG, PNG, PDF, AI supported)
+                    <p className="text-gray-400 text-xs mt-1">
+                        Supports JPG, PNG, PDF, AI files
                     </p>
                 </div>
             </div>
@@ -84,7 +98,6 @@ export default function SearchBox({ onSearch, loading }) {
                     <Button
                         onClick={() => onSearch(selectedFile)}
                         size="lg"
-                        className="bg-blue-600 hover:bg-blue-700"
                     >
                         <Search className="mr-2 h-4 w-4" />
                         Search Again
