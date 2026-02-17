@@ -37,7 +37,6 @@ services:
     depends_on:
       - redis
       - db
-      # - minio  <-- Removed dependency on internal minio
     deploy:
       replicas: 4
     environment:
@@ -56,8 +55,52 @@ services:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_PORT: 5432
       INGEST_QUEUE_BACKEND: ${INGEST_QUEUE_BACKEND}
+      HF_TOKEN: ${HF_TOKEN}
     command: python tools/run_worker.py
     restart: always
 
+  # --- API Backend ---
+  app:
+    build: .
+    image: image-similarity-api
+    container_name: vector_search
+    ports:
+      - "8000:8000"
+    depends_on:
+      - db
+      - redis
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      POSTGRES_HOST: db
+      MINIO_ENDPOINT: "http://host.docker.internal:9000"
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET_NAME: ${MINIO_BUCKET_NAME}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_PORT: 5432
+      INGEST_QUEUE_BACKEND: ${INGEST_QUEUE_BACKEND}
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET}
+      HF_TOKEN: ${HF_TOKEN}
+    command: uvicorn app:app --host 0.0.0.0 --port 8000
+    restart: always
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # --- React Frontend ---
+  frontend:
+    build: ./frontend
+    image: image-similarity-frontend
+    container_name: vector_ui
+    ports:
+      - "5173:80" # Nginx listens on 80 inside, exposed as 5173 to match dev port (or 80 for prod)
+    depends_on:
+      - app
+    restart: always
+
 volumes:
-  postgres_data: # minio_data: # Removed as we use external S3
+  postgres_data:

@@ -8,7 +8,8 @@ class ImageEmbedder:
         self.device = DEVICE if torch.cuda.is_available() else "cpu"
 
         self.model = CLIPVisionModel.from_pretrained(
-            MODEL_NAME
+            MODEL_NAME,
+            use_safetensors=True
         ).to(self.device)
 
         self.processor = CLIPProcessor.from_pretrained(MODEL_NAME)

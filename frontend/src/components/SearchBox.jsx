@@ -1,4 +1,6 @@
 import { useState, useRef } from 'react'
+import { Search } from 'lucide-react'
+import { Button } from './ui/button'
 
 export default function SearchBox({ onSearch, loading }) {
     const [dragActive, setDragActive] = useState(false)
@@ -79,12 +81,14 @@ export default function SearchBox({ onSearch, loading }) {
 
             {selectedFile && !loading && (
                 <div className="mt-6 text-center">
-                    <button
+                    <Button
                         onClick={() => onSearch(selectedFile)}
-                        className="px-8 py-3 bg-white text-purple-600 font-bold rounded-lg hover:bg-purple-50 transition-all shadow-lg"
+                        size="lg"
+                        className="bg-blue-600 hover:bg-blue-700"
                     >
-                        🔍 Search Again
-                    </button>
+                        <Search className="mr-2 h-4 w-4" />
+                        Search Again
+                    </Button>
                 </div>
             )}
         </div>

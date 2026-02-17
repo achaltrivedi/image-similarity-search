@@ -1,10 +1,12 @@
 # app.py
 
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, HTMLResponse
 import os
 import threading
+import json
+import redis
 from dotenv import load_dotenv
 
 # Load env vars from .env file (for local dev)
@@ -17,6 +19,10 @@ from core.preprocessor import ImagePreprocessor
 from fastapi import Request
 from core.database import SessionLocal, ImageEmbedding, init_db
 from core.task_queue import enqueue_minio_record, queue_health
+
+# Initialize Redis client for query caching
+REDIS_URL = os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0")
+redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 
 # ------------------------
 # CONFIG
@@ -108,48 +114,101 @@ def health():
 # ------------------------
 @app.post("/search")
 async def search_image(
-    file: UploadFile = File(...),
-    top_k: int = DEFAULT_TOP_K
+    file: UploadFile = File(None),
+    query_id: str = Form(None),
+    page: int = Form(1),
+    page_size: int = Form(50),
+    similarity_threshold: float = Form(0.0)  # Default: show all results (100% to 0%)
 ):
+    """
+    Search for similar images with pagination support.
+    
+    Args:
+        file: Image file to search (required on first request)
+        query_id: Cached query ID from previous request (for pagination)
+        page: Page number (1-indexed)
+        page_size: Results per page (default: 50)
+        similarity_threshold: Minimum similarity (0.0-1.0, default: 0.0 = all results)
+    
+    Returns:
+        {
+            "results": [...],
+            "query_id": "abc123",
+            "page": 1,
+            "page_size": 50,
+            "has_more": true,
+            "total_results": 154
+        }
+    """
     global embedder
-
-    # Lazy load
+    
+    # Lazy load embedder
     if embedder is None:
         print("Loading embedder lazily...")
         embedder = ImageEmbedder()
-
-    image_bytes = await file.read()
     
-    # Use Preprocessor to handle PDF/GIF inputs for search queries too
-    try:
-        image = ImagePreprocessor.process(image_bytes, file.filename)
-    except Exception as e:
-        return JSONResponse(status_code=400, content={"error": f"Invalid file: {str(e)}"})
-
-    # Generate embedding for query image
-    query_embedding = embedder.embed_images([image])
-    query_np = query_embedding.cpu().numpy()[0]  # Get first (and only) embedding
-
-    # Query PostgreSQL using pgvector cosine similarity
-    db = SessionLocal()
-    try:
-        # Convert numpy array to list for PostgreSQL
+    # Get or compute query embedding
+    if query_id:
+        # Retrieve cached embedding from Redis
+        cached_data = redis_client.get(f"query:{query_id}")
+        if not cached_data:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Query ID expired or invalid. Please upload image again."}
+            )
+        query_vector = json.loads(cached_data)
+    else:
+        # First request: compute embedding and cache it
+        if not file:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Either 'file' or 'query_id' must be provided"}
+            )
+        
+        image_bytes = await file.read()
+        
+        # Use Preprocessor to handle PDF/GIF inputs
+        try:
+            image = ImagePreprocessor.process(image_bytes, file.filename)
+        except Exception as e:
+            return JSONResponse(status_code=400, content={"error": f"Invalid file: {str(e)}"})
+        
+        # Generate embedding
+        query_embedding = embedder.embed_images([image])
+        query_np = query_embedding.cpu().numpy()[0]
         query_vector = query_np.tolist()
         
-        # Use pgvector's cosine distance operator (<=>)
-        # Lower distance = more similar
+        # Generate unique query ID and cache embedding (5 min TTL)
+        import hashlib
+        query_id = hashlib.md5(image_bytes).hexdigest()
+        redis_client.setex(f"query:{query_id}", 300, json.dumps(query_vector))
+    
+    # Calculate pagination offset
+    offset = (page - 1) * page_size
+    
+    # Query PostgreSQL with pagination
+    db = SessionLocal()
+    try:
+        # Get total count (for has_more calculation)
+        total_query = db.query(ImageEmbedding).filter(
+            ImageEmbedding.embedding.cosine_distance(query_vector) <= (1 - similarity_threshold)
+        )
+        total_results = total_query.count()
+        
+        # Get paginated results
         results_query = db.query(
             ImageEmbedding.object_key,
             ImageEmbedding.embedding.cosine_distance(query_vector).label('distance')
-        ).order_by('distance').limit(top_k)
+        ).filter(
+            ImageEmbedding.embedding.cosine_distance(query_vector) <= (1 - similarity_threshold)
+        ).order_by('distance').limit(page_size).offset(offset)
         
         results = []
         s3 = get_s3_client()
-        print(f"Search returned {top_k} candidates")
+        print(f"Search page {page} returned {results_query.count()} results")
         
         for row in results_query:
             key = row.object_key
-            # Convert distance to similarity score (1 - distance)
             similarity = 1 - row.distance
             
             image_url = None
@@ -163,8 +222,8 @@ async def search_image(
                     ExpiresIn=3600
                 )
                 
-                # 2. URL for download (forces browser to download instead of display)
-                filename = key.split('/')[-1]  # Extract filename from path
+                # 2. URL for download
+                filename = key.split('/')[-1]
                 download_url = s3.generate_presigned_url(
                     'get_object',
                     Params={
@@ -175,7 +234,7 @@ async def search_image(
                     ExpiresIn=3600
                 )
                 
-                # 3. URL for thumbnail (display)
+                # 3. URL for thumbnail
                 if key.lower().endswith((".ai", ".pdf")):
                     thumb_key = f".thumbnails/{key}.png"
                     thumbnail_url = s3.generate_presigned_url(
@@ -184,7 +243,6 @@ async def search_image(
                         ExpiresIn=3600
                     )
                 else:
-                    # Standard images use themselves as thumbnails
                     thumbnail_url = image_url
 
             except Exception as e:
@@ -200,7 +258,14 @@ async def search_image(
     finally:
         db.close()
 
-    return {"results": results}
+    return {
+        "results": results,
+        "query_id": query_id,
+        "page": page,
+        "page_size": page_size,
+        "has_more": (offset + len(results)) < total_results,
+        "total_results": total_results
+    }
 
 
 # ------------------------

@@ -1,3 +1,7 @@
+import { Eye, Download } from 'lucide-react'
+import { Button } from './ui/button'
+import { Badge } from './ui/badge'
+
 export default function ResultCard({ result, rank }) {
     const filename = result.image_key?.split('/').pop() || 'Unknown'
     const similarity = (result.similarity * 100).toFixed(1)
@@ -5,9 +9,9 @@ export default function ResultCard({ result, rank }) {
     return (
         <div className="bg-white/10 backdrop-blur-lg rounded-xl overflow-hidden shadow-lg hover:shadow-2xl transition-all hover:scale-105">
             {/* Rank Badge */}
-            <div className="absolute top-2 left-2 bg-purple-600 text-white px-3 py-1 rounded-full text-sm font-bold z-10">
+            <Badge variant="secondary" className="absolute top-2 left-2 z-10">
                 #{rank}
-            </div>
+            </Badge>
 
             {/* Image */}
             <div className="aspect-square bg-white/5">
@@ -36,22 +40,33 @@ export default function ResultCard({ result, rank }) {
                 {/* Action Buttons */}
                 <div className="flex gap-2">
                     {result.image_url && (
-                        <a
-                            href={result.image_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="flex-1 bg-blue-500 hover:bg-blue-600 text-white text-center py-2 rounded-lg transition-all text-sm font-semibold"
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            className="flex-1"
+                            asChild
                         >
-                            👁️ View
-                        </a>
+                            <a
+                                href={result.image_url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                            >
+                                <Eye className="mr-2 h-4 w-4" />
+                                View
+                            </a>
+                        </Button>
                     )}
                     {result.download_url && (
-                        <a
-                            href={result.download_url}
-                            className="flex-1 bg-green-500 hover:bg-green-600 text-white text-center py-2 rounded-lg transition-all text-sm font-semibold"
+                        <Button
+                            size="sm"
+                            className="flex-1 bg-green-600 hover:bg-green-700"
+                            asChild
                         >
-                            ⬇️ Download
-                        </a>
+                            <a href={result.download_url}>
+                                <Download className="mr-2 h-4 w-4" />
+                                Download
+                            </a>
+                        </Button>
                     )}
                 </div>
             </div>
