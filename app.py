@@ -6,6 +6,7 @@ from fastapi.responses import JSONResponse, HTMLResponse
 import os
 import threading
 import json
+import hashlib
 import redis
 from dotenv import load_dotenv
 
@@ -41,9 +42,10 @@ app = FastAPI(
 # Enable CORS (Cross-Origin Resource Sharing)
 # Allows the API to be called from other domains (e.g., a separate Frontend App)
 from fastapi.middleware.cors import CORSMiddleware
+ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:5174").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, replace with specific domains
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -167,6 +169,14 @@ async def search_image(
         
         image_bytes = await file.read()
         
+        # Enforce file size limit (50MB)
+        MAX_FILE_SIZE = 50 * 1024 * 1024
+        if len(image_bytes) > MAX_FILE_SIZE:
+            return JSONResponse(
+                status_code=413,
+                content={"error": f"File too large ({len(image_bytes) // (1024*1024)}MB). Maximum is 50MB."}
+            )
+        
         # Use Preprocessor to handle PDF/GIF inputs
         try:
             image = ImagePreprocessor.process(image_bytes, file.filename)
@@ -179,7 +189,6 @@ async def search_image(
         query_vector = query_np.tolist()
         
         # Generate unique query ID and cache embedding (5 min TTL)
-        import hashlib
         query_id = hashlib.md5(image_bytes).hexdigest()
         redis_client.setex(f"query:{query_id}", 300, json.dumps(query_vector))
     
@@ -204,8 +213,16 @@ async def search_image(
         ).order_by('distance').limit(page_size).offset(offset)
         
         results = []
-        s3 = get_s3_client()
         print(f"Search page {page} returned {results_query.count()} results")
+        
+        # Try to get S3 client — gracefully degrade if MinIO is unavailable
+        try:
+            s3 = get_s3_client()
+            s3_available = True
+        except Exception as e:
+            print(f"Warning: S3/MinIO unavailable, URLs will be empty: {e}")
+            s3 = None
+            s3_available = False
         
         for row in results_query:
             key = row.object_key
@@ -214,39 +231,41 @@ async def search_image(
             image_url = None
             thumbnail_url = None
             download_url = None
-            try:
-                # 1. URL for original file (view)
-                image_url = s3.generate_presigned_url(
-                    'get_object',
-                    Params={'Bucket': BUCKET_NAME, 'Key': key},
-                    ExpiresIn=3600
-                )
-                
-                # 2. URL for download
-                filename = key.split('/')[-1]
-                download_url = s3.generate_presigned_url(
-                    'get_object',
-                    Params={
-                        'Bucket': BUCKET_NAME, 
-                        'Key': key,
-                        'ResponseContentDisposition': f'attachment; filename="{filename}"'
-                    },
-                    ExpiresIn=3600
-                )
-                
-                # 3. URL for thumbnail
-                if key.lower().endswith((".ai", ".pdf")):
-                    thumb_key = f".thumbnails/{key}.png"
-                    thumbnail_url = s3.generate_presigned_url(
+            
+            if s3_available and s3:
+                try:
+                    # 1. URL for original file (view)
+                    image_url = s3.generate_presigned_url(
                         'get_object',
-                        Params={'Bucket': BUCKET_NAME, 'Key': thumb_key},
+                        Params={'Bucket': BUCKET_NAME, 'Key': key},
                         ExpiresIn=3600
                     )
-                else:
-                    thumbnail_url = image_url
+                    
+                    # 2. URL for download
+                    filename = key.split('/')[-1]
+                    download_url = s3.generate_presigned_url(
+                        'get_object',
+                        Params={
+                            'Bucket': BUCKET_NAME, 
+                            'Key': key,
+                            'ResponseContentDisposition': f'attachment; filename="{filename}"'
+                        },
+                        ExpiresIn=3600
+                    )
+                    
+                    # 3. URL for thumbnail
+                    if key.lower().endswith((".ai", ".pdf")):
+                        thumb_key = f".thumbnails/{key}.png"
+                        thumbnail_url = s3.generate_presigned_url(
+                            'get_object',
+                            Params={'Bucket': BUCKET_NAME, 'Key': thumb_key},
+                            ExpiresIn=3600
+                        )
+                    else:
+                        thumbnail_url = image_url
 
-            except Exception as e:
-                print(f"Error generating presigned URL for {key}: {e}")
+                except Exception as e:
+                    print(f"Error generating presigned URL for {key}: {e}")
 
             results.append({
                 "image_key": key,

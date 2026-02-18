@@ -9,7 +9,7 @@ from pgvector.sqlalchemy import Vector
 DB_USER = os.getenv("POSTGRES_USER", "admin")
 DB_PASSWORD = os.getenv("POSTGRES_PASSWORD", "password")
 DB_HOST = os.getenv("POSTGRES_HOST", "127.0.0.1") # 127.0.0.1 for running app locally (IPv4), 'db' for running inside docker
-DB_PORT = os.getenv("POSTGRES_PORT", "5433")
+DB_PORT = os.getenv("POSTGRES_PORT", "5434")
 DB_NAME = os.getenv("POSTGRES_DB", "vectordb")
 
 DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"

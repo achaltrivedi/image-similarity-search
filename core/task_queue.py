@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 import os
 
 QUEUE_NAME = os.getenv("INGEST_QUEUE_NAME", "minio_ingestion")

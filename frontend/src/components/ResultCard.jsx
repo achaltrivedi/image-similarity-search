@@ -15,7 +15,12 @@ export default function ResultCard({ result, rank }) {
                     alt={filename}
                     className="w-full h-full object-cover"
                     onError={(e) => {
-                        e.target.src = 'https://via.placeholder.com/400?text=No+Preview'
+                        e.target.style.display = 'none'
+                        e.target.parentElement.classList.add('flex', 'items-center', 'justify-center')
+                        const placeholder = document.createElement('span')
+                        placeholder.className = 'text-gray-400 text-sm'
+                        placeholder.textContent = 'No Preview'
+                        e.target.parentElement.appendChild(placeholder)
                     }}
                 />
 
