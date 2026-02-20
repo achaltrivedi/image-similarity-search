@@ -23,6 +23,3 @@ boto3>=1.26.0
 # Background queue
 redis>=5.0.0
 rq>=1.16.0
-
-# Legacy dependency kept for compatibility with older local scripts
-faiss-cpu>=1.7.4

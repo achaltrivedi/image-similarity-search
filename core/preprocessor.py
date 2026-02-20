@@ -78,7 +78,7 @@ class ImagePreprocessor:
     def create_thumbnail(image: Image.Image, max_size: int = 512) -> bytes:
         """
         Creates a thumbnail from a PIL Image.
-        Returns PNG bytes.
+        Returns PNG bytes, or empty bytes on failure.
         """
         try:
             # Copy to avoid modifying original
@@ -87,7 +87,14 @@ class ImagePreprocessor:
             
             output = io.BytesIO()
             thumb.save(output, format="PNG", optimize=True)
-            return output.getvalue()
+            png_bytes = output.getvalue()
+            
+            # Validate: PNG must start with magic bytes and be at least 100 bytes
+            if len(png_bytes) < 100 or not png_bytes.startswith(b'\x89PNG'):
+                print(f"⚠️ Thumbnail produced invalid PNG ({len(png_bytes)} bytes)")
+                return b""
+            
+            return png_bytes
         except Exception as e:
             print(f"⚠️ Thumbnail generation failed: {e}")
             return b""

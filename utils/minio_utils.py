@@ -5,6 +5,7 @@ from utils.minio_config import (
     MINIO_ENDPOINT,
     MINIO_ACCESS_KEY,
     MINIO_SECRET_KEY,
+    MINIO_PUBLIC_ENDPOINT,
     BUCKET_NAME
 )
 
@@ -23,15 +24,37 @@ SUPPORTED_IMAGE_EXTENSIONS = (
     ".ai",
 )
 
+# Cached S3 clients (avoid creating a new boto3 client per request)
+_s3_client = None
+_s3_public_client = None
+
 def get_s3_client():
-    return boto3.client(
-        "s3",
-        endpoint_url=MINIO_ENDPOINT,
-        aws_access_key_id=MINIO_ACCESS_KEY,
-        aws_secret_access_key=MINIO_SECRET_KEY,
-        region_name="us-east-1",
-        config=Config(signature_version='s3v4', s3={'addressing_style': 'path'})
-    )
+    """S3 client using internal endpoint (for backend operations: download, upload)."""
+    global _s3_client
+    if _s3_client is None:
+        _s3_client = boto3.client(
+            "s3",
+            endpoint_url=MINIO_ENDPOINT,
+            aws_access_key_id=MINIO_ACCESS_KEY,
+            aws_secret_access_key=MINIO_SECRET_KEY,
+            region_name="us-east-1",
+            config=Config(signature_version='s3v4', s3={'addressing_style': 'path'})
+        )
+    return _s3_client
+
+def get_public_s3_client():
+    """S3 client using public endpoint (for generating browser-accessible presigned URLs)."""
+    global _s3_public_client
+    if _s3_public_client is None:
+        _s3_public_client = boto3.client(
+            "s3",
+            endpoint_url=MINIO_PUBLIC_ENDPOINT,
+            aws_access_key_id=MINIO_ACCESS_KEY,
+            aws_secret_access_key=MINIO_SECRET_KEY,
+            region_name="us-east-1",
+            config=Config(signature_version='s3v4', s3={'addressing_style': 'path'})
+        )
+    return _s3_public_client
 
 def load_images_from_minio():
     """

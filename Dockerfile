@@ -18,6 +18,14 @@ COPY requirements.txt .
 # Remove torch from requirements.txt to avoid double install (or let pip skipping handle it)
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Pre-download CLIP model during build (avoids ~600MB download on first startup)
+# This prevents health check timeouts and container restart loops
+RUN python -c "\
+    from transformers import CLIPVisionModel, CLIPProcessor; \
+    CLIPVisionModel.from_pretrained('openai/clip-vit-base-patch32', use_safetensors=True); \
+    CLIPProcessor.from_pretrained('openai/clip-vit-base-patch32'); \
+    print('CLIP model pre-downloaded successfully')"
+
 # Copy application code
 COPY . .
 

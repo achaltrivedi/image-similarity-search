@@ -535,6 +535,54 @@ curl http://localhost:8000/health
 - [ ] Check health endpoint
 - [ ] View logs for errors
 
+
+---
+
+### Phase 3.5: Initial Batch Indexing (One-Time Job)
+
+**Critical Step:** Your MinIO bucket has **300,000+ existing images**. The webhook system only processes *new* uploads. You must run the batch indexer once to ingest the backlog.
+
+#### 3.5.1 Run Batch Indexer Container
+
+This runs as a detached process inside the Docker network, allowing it to talk to MinIO (`http://host.docker.internal:9000` or production URL) and Postgres/Redis directly.
+
+**Command to start indexing:**
+
+```bash
+# Run the batch indexer script inside the 'app' container
+# Using 'run --rm' creates a temporary container that cleans up after itself
+# We mount the volume to ensure logs are persisted if needed
+
+dmpy_command="python tools/batch_indexer.py"
+
+# If you want to force re-index everything (overwrite existing embeddings):
+# dmpy_command="python tools/batch_indexer.py --force"
+
+docker-compose -f docker-compose.prod.yml run --rm app $dmpy_command
+```
+
+#### 3.5.2 Monitor Progress
+
+The indexer prints progress to the console. If you ran it in detached mode (`-d`), view logs:
+
+```bash
+# If you ran with -d, check logs:
+docker logs -f <container_id>
+```
+
+**Performance Estimates (for 300,000 images):**
+
+| Hardware | Speed | Estimated Time |
+|----------|-------|----------------|
+| **GPU (CUDA)** | ~2-4 images/sec | **21 - 42 hours** |
+| **CPU Only** | ~0.5-1 image/sec | **3.5 - 7 days** |
+
+> [!IMPORTANT]
+> - Ensure **no other heavy workloads** are running if using CPU.
+> - The indexer automatically handles **thumbnails** creation.
+> - It skips already-indexed files unless `--force` is used.
+> - You can stop and resume at any time (it checks [get_existing_keys](file:///c:/Users/ACHAL.TRIVEDI/Downloads/InHouse-Indexed%20Search/tools/batch_indexer.py#25-34) on startup).
+
 ---
 
 ### Phase 4: Testing & Validation (1-2 hours)
@@ -804,9 +852,10 @@ docker exec vector_db_prod psql -U admin -d vectordb -c "SELECT 1"
 | Phase 1: Preparation | 2-3 hours | Medium |
 | Phase 2: Backend Setup | 1-2 hours | Low |
 | Phase 3: Server Deployment | 3-4 hours | High |
+| Phase 3.5: Batch Indexing | 1-7 days | Low (Automated) |
 | Phase 4: Testing | 1-2 hours | Low |
 | Phase 5: Hardening | 2-3 hours | Medium |
-| **Total** | **9-14 hours** | **Medium-High** |
+| **Total** | **2-3 days + Indexing Time** | **Medium-High** |
 
 **Timeline:** 2-3 days for full production deployment
 

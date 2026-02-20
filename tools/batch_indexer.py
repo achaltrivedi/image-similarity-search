@@ -6,11 +6,15 @@ import argparse
 from typing import List, Set, Tuple
 from pathlib import Path
 from PIL import Image
+from dotenv import load_dotenv
 
 # Ensure project root is importable when run from tools/ or repo root.
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+
+# Load .env from project root
+load_dotenv(PROJECT_ROOT / ".env")
 
 from core.database import SessionLocal, ImageEmbedding
 from core.embedding import ImageEmbedder

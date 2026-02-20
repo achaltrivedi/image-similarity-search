@@ -14,16 +14,25 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from core.embedding import ImageEmbedder
-from utils.minio_utils import get_s3_client
+from utils.minio_utils import get_s3_client, get_public_s3_client
 from utils.minio_config import BUCKET_NAME
 from core.preprocessor import ImagePreprocessor
 from fastapi import Request
 from core.database import SessionLocal, ImageEmbedding, init_db
 from core.task_queue import enqueue_minio_record, queue_health
 
-# Initialize Redis client for query caching
+# Lazy Redis client (avoids crash if Redis starts after the app)
 REDIS_URL = os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0")
-redis_client = redis.from_url(REDIS_URL, decode_responses=True)
+_redis_client = None
+
+def get_redis():
+    global _redis_client
+    if _redis_client is None:
+        _redis_client = redis.from_url(REDIS_URL, decode_responses=True)
+    return _redis_client
+
+# Concurrency limiter: max 3 simultaneous CLIP inferences to prevent OOM
+_embed_semaphore = threading.Semaphore(3)
 
 # ------------------------
 # CONFIG
@@ -98,10 +107,19 @@ def startup_event():
 @app.get("/health")
 def health():
     queue_status = queue_health()
+    
+    # Check Redis connectivity
+    redis_status = "ok"
+    try:
+        get_redis().ping()
+    except Exception as e:
+        redis_status = f"degraded: {e}"
+    
     return {
         "status": "ok",
         "backend": "postgresql",
         "queue": queue_status,
+        "redis": redis_status,
     }
 
 
@@ -152,7 +170,13 @@ async def search_image(
     # Get or compute query embedding
     if query_id:
         # Retrieve cached embedding from Redis
-        cached_data = redis_client.get(f"query:{query_id}")
+        try:
+            cached_data = get_redis().get(f"query:{query_id}")
+        except Exception as e:
+            return JSONResponse(
+                status_code=503,
+                content={"error": f"Cache service unavailable: {e}. Please try again."}
+            )
         if not cached_data:
             return JSONResponse(
                 status_code=400,
@@ -183,14 +207,19 @@ async def search_image(
         except Exception as e:
             return JSONResponse(status_code=400, content={"error": f"Invalid file: {str(e)}"})
         
-        # Generate embedding
-        query_embedding = embedder.embed_images([image])
+        # Generate embedding (with concurrency limit to prevent GPU OOM)
+        with _embed_semaphore:
+            query_embedding = embedder.embed_images([image])
         query_np = query_embedding.cpu().numpy()[0]
         query_vector = query_np.tolist()
         
         # Generate unique query ID and cache embedding (5 min TTL)
         query_id = hashlib.md5(image_bytes).hexdigest()
-        redis_client.setex(f"query:{query_id}", 300, json.dumps(query_vector))
+        try:
+            get_redis().setex(f"query:{query_id}", 300, json.dumps(query_vector))
+        except Exception as e:
+            print(f"Warning: Failed to cache query in Redis: {e}")
+            # Search still works without caching, just can't paginate
     
     # Calculate pagination offset
     offset = (page - 1) * page_size
@@ -215,9 +244,9 @@ async def search_image(
         results = []
         print(f"Search page {page} returned {results_query.count()} results")
         
-        # Try to get S3 client — gracefully degrade if MinIO is unavailable
+        # Use public S3 client for presigned URLs (browser-accessible endpoint)
         try:
-            s3 = get_s3_client()
+            s3 = get_public_s3_client()
             s3_available = True
         except Exception as e:
             print(f"Warning: S3/MinIO unavailable, URLs will be empty: {e}")
