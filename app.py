@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from core.embedding import ImageEmbedder
-from utils.minio_utils import get_s3_client, get_public_s3_client
+from utils.minio_utils import get_s3_client, get_public_s3_client, get_bucket_keys
 from utils.minio_config import BUCKET_NAME
 from core.preprocessor import ImagePreprocessor
 from fastapi import Request
@@ -221,28 +221,37 @@ async def search_image(
             print(f"Warning: Failed to cache query in Redis: {e}")
             # Search still works without caching, just can't paginate
     
-    # Calculate pagination offset
-    offset = (page - 1) * page_size
+    # Get cached set of keys that actually exist in the bucket
+    try:
+        bucket_keys = get_bucket_keys()
+    except Exception as e:
+        print(f"Warning: Could not fetch bucket keys, skipping existence filter: {e}")
+        bucket_keys = None  # Skip filtering if bucket is unreachable
     
-    # Query PostgreSQL with pagination
+    # Query PostgreSQL — fetch ALL matching results (pagination done in Python after filtering)
     db = SessionLocal()
     try:
-        # Get total count (for has_more calculation)
-        total_query = db.query(ImageEmbedding).filter(
-            ImageEmbedding.embedding.cosine_distance(query_vector) <= (1 - similarity_threshold)
-        )
-        total_results = total_query.count()
-        
-        # Get paginated results
+        # Get all matching results ordered by similarity
         results_query = db.query(
             ImageEmbedding.object_key,
             ImageEmbedding.embedding.cosine_distance(query_vector).label('distance')
         ).filter(
             ImageEmbedding.embedding.cosine_distance(query_vector) <= (1 - similarity_threshold)
-        ).order_by('distance').limit(page_size).offset(offset)
+        ).order_by('distance')
         
-        results = []
-        print(f"Search page {page} returned {results_query.count()} results")
+        # Filter: only keep results whose key exists in the bucket
+        all_matches = []
+        for row in results_query:
+            if bucket_keys is not None and row.object_key not in bucket_keys:
+                continue  # Skip — image no longer in bucket
+            all_matches.append((row.object_key, float(1 - row.distance)))
+        
+        # Paginate the filtered results in Python
+        total_results = len(all_matches)
+        offset = (page - 1) * page_size
+        page_matches = all_matches[offset:offset + page_size]
+        
+        print(f"Search page {page}: {len(page_matches)} results (filtered {total_results} from DB)")
         
         # Use public S3 client for presigned URLs (browser-accessible endpoint)
         try:
@@ -253,10 +262,8 @@ async def search_image(
             s3 = None
             s3_available = False
         
-        for row in results_query:
-            key = row.object_key
-            similarity = 1 - row.distance
-            
+        results = []
+        for key, similarity in page_matches:
             image_url = None
             thumbnail_url = None
             download_url = None
@@ -298,7 +305,7 @@ async def search_image(
 
             results.append({
                 "image_key": key,
-                "similarity": float(similarity),
+                "similarity": similarity,
                 "image_url": image_url,
                 "thumbnail_url": thumbnail_url,
                 "download_url": download_url

@@ -1,3 +1,4 @@
+import time
 import boto3
 from io import BytesIO
 from PIL import Image
@@ -28,6 +29,11 @@ SUPPORTED_IMAGE_EXTENSIONS = (
 _s3_client = None
 _s3_public_client = None
 
+# Cached bucket key set (refreshed every 5 minutes)
+_bucket_keys_cache = None
+_bucket_keys_timestamp = 0
+_BUCKET_CACHE_TTL = 300  # 5 minutes
+
 def get_s3_client():
     """S3 client using internal endpoint (for backend operations: download, upload)."""
     global _s3_client
@@ -55,6 +61,26 @@ def get_public_s3_client():
             config=Config(signature_version='s3v4', s3={'addressing_style': 'path'})
         )
     return _s3_public_client
+
+def get_bucket_keys() -> frozenset:
+    """Return a cached set of ALL object keys in the bucket.
+
+    Used for fast O(1) existence checks when filtering search results.
+    Refreshes automatically every 5 minutes.
+    """
+    global _bucket_keys_cache, _bucket_keys_timestamp
+    now = time.time()
+    if _bucket_keys_cache is None or (now - _bucket_keys_timestamp) > _BUCKET_CACHE_TTL:
+        s3 = get_s3_client()
+        keys = set()
+        paginator = s3.get_paginator("list_objects_v2")
+        for page in paginator.paginate(Bucket=BUCKET_NAME):
+            for obj in page.get("Contents", []):
+                keys.add(obj["Key"])
+        _bucket_keys_cache = frozenset(keys)
+        _bucket_keys_timestamp = now
+        print(f"🔄 Bucket key cache refreshed: {len(keys)} objects")
+    return _bucket_keys_cache
 
 def load_images_from_minio():
     """

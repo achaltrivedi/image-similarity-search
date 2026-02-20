@@ -1,139 +1,194 @@
 # Image Similarity Search Microservice
 
 ## Overview
-This repository contains a production-ready image similarity search microservice designed to ingest, index, and retrieve visually similar graphical assets at scale. The system is built to handle more than 300,000 images stored in an S3-compatible object storage and integrates seamlessly with an existing Order Management System (OMS).
+A production-ready image similarity search microservice that ingests, indexes, and retrieves visually similar graphical assets at scale. Built to handle 300k+ images stored in S3-compatible object storage (MinIO), with real-time webhook-driven ingestion.
 
-The service automatically processes new images, generates vector embeddings, stores them in a vector-enabled database, and exposes a search API that returns similar images along with similarity scores.
-
----
-
-## System Status
-**Status:** 🟢 Production Ready (Code Complete)  
-**Last Updated:** Feb 16, 2026
-
-All core functionality has been implemented, tested, and verified. The system is cleared for full-scale ingestion.
+**Supports:** PNG, JPEG, PDF, AI (Adobe Illustrator), GIF, TIFF, BMP, WebP
 
 ---
 
-## Key Features
-- Vector-based image similarity search
-- Supports PNG, JPEG, PDF, and AI (Adobe Illustrator) formats
-- Automatic ingestion from MinIO (S3-compatible storage)
-- Persistent vector storage for restart safety
-- Dockerized microservice architecture
-- Designed for high-throughput ingestion and search workloads
+## Quick Start (Local Development)
 
----
+### Prerequisites
+- **Docker Desktop** (running)
+- **Python 3.10+**
+- **Node.js 18+** and npm
+- A `.env` file (see below)
 
-## Architecture Overview
+### 1. Clone & Setup
 
-OMS → MinIO (S3)
-↓
-Ingestion Workers
-↓
-Image Preprocessing
-↓
-Vector Embeddings
-↓
-PostgreSQL (Vector Store)
-↓
-Search API (FastAPI)
-
-
----
-
-## Recent Critical Fixes (Last 24 Hours)
-
-### Port Conflict Resolution
-- PostgreSQL moved to port 5434 to avoid Windows port reservation conflicts.
-- Ensures stable startup across development environments.
-
-### Similarity Accuracy Improvement
-- Updated `preprocessor.py` to composite transparent images on a white background.
-- Resolved accuracy mismatch between `.ai` and `.png` assets.
-- Improved similarity accuracy from 89% to 100% in validation tests.
-
-### Thumbnail Pipeline Stabilization
-- Standardized MinIO service to port 9000.
-- Backfilled missing thumbnails to restore ingestion consistency.
-
----
-
-## Codebase Health
-
-### Technical Debt
-- No pending TODOs in critical execution paths.
-
-### Configuration
-- Fully environment-driven using `.env` files.
-- No hardcoded secrets or ports.
-
-### Resilience
-- Docker health checks enabled for Database and Redis.
-- Worker retry logic enabled (3 retry attempts).
-- Database connection pooling tuned for 20 concurrent connections.
-
----
-
-## Security Considerations
-
-### Current State
-- API endpoints are currently unauthenticated.
-- Intended for internal or firewalled deployments only.
-
-### High Priority Recommendation
-Authentication must be enabled before public exposure.
-
-Recommended approaches:
-- HTTP Basic Authentication
-- API Key–based middleware
-
-Risk if omitted:
-- Unauthorized index deletion
-- Unrestricted ingestion and search access
-
----
-
-## Observability and Monitoring
-
-### Current State
-- Application logs available via Docker stdout.
-
-### Recommended Enhancements
-Add a monitoring stack using:
-- Prometheus for metrics collection
-- Grafana for visualization
-
-Suggested metrics:
-- Search latency
-- Ingestion rate (images per second)
-- Worker queue depth
-- Database connection usage
-
----
-
-## CI/CD and Automation
-
-### Current State
-- Manual Docker-based deployment.
-
-### Recommended Enhancements
-Introduce a GitHub Actions pipeline to:
-- Build Docker images on push
-- Enable versioned releases
-- Support future staged deployments
-
----
-
-## Deployment
-
-### Requirements
-- Docker and Docker Compose
-- MinIO (S3-compatible object storage)
-- PostgreSQL with vector extension
-- Redis for background workers
-
-### Start the System
 ```bash
-docker compose up -d
+# Clone the repo
+git clone https://github.com/achaltrivedi/image-similarity-microservice.git
+cd image-similarity-microservice
 
+# Create Python virtual environment
+python -m venv venv
+
+# Activate it
+# Windows:
+venv\Scripts\activate
+# macOS/Linux:
+source venv/bin/activate
+
+# Install Python dependencies
+pip install -r requirements.txt
+```
+
+### 2. Configure `.env`
+
+Create a `.env` file in the project root (copy from `.env.example` if available):
+
+```env
+# --- Database ---
+POSTGRES_USER=admin
+POSTGRES_PASSWORD=your_password
+POSTGRES_DB=vectordb
+POSTGRES_HOST=127.0.0.1
+POSTGRES_PORT=5434
+
+# --- MinIO (Object Storage) ---
+MINIO_ROOT_USER=your_minio_access_key
+MINIO_ROOT_PASSWORD=your_minio_secret_key
+MINIO_BUCKET_NAME=your_bucket_name
+MINIO_ENDPOINT=http://your-minio-host:9000
+MINIO_PUBLIC_ENDPOINT=http://your-minio-host:9000
+
+# --- Redis ---
+REDIS_URL=redis://127.0.0.1:6379/0
+
+# --- Application ---
+WEBHOOK_SECRET=your_webhook_secret
+INGEST_QUEUE_BACKEND=rq
+INGEST_QUEUE_NAME=minio_ingestion
+
+# --- Hugging Face ---
+HF_TOKEN=your_hf_token
+```
+
+### 3. Start Infrastructure (Docker)
+
+```bash
+# Start PostgreSQL (pgvector) + Redis
+docker-compose up -d db redis
+
+# Verify containers are running
+docker ps
+```
+
+### 4. Start Backend
+
+```bash
+# With venv activated:
+uvicorn app:app --reload
+```
+
+Wait for: `Image Similarity Service is READY`
+
+### 5. Start Frontend
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Frontend available at: **http://localhost:5173**
+
+### 6. Index Existing Images
+
+```bash
+# Verify bucket connection
+python tools/debug_bucket_contents.py
+
+# Index all images from the bucket into pgvector
+python tools/batch_indexer.py
+```
+
+### 7. Test It
+
+Open **http://localhost:5173**, upload an image, and search!
+
+---
+
+## Architecture
+
+```
+MinIO (S3) ──webhook──▶ FastAPI ──▶ Redis Queue ──▶ Workers
+                           │                          │
+                           ▼                          ▼
+                     Search API            Embed + Store in
+                           │              PostgreSQL (pgvector)
+                           ▼
+                    React Frontend
+```
+
+| Service | Port | Description |
+|---|---|---|
+| FastAPI Backend | 8000 | Search API + webhook endpoint |
+| React Frontend | 5173 | Upload & search UI |
+| PostgreSQL | 5434 | Vector database (pgvector) |
+| Redis | 6379 | Background job queue |
+| MinIO | 9000 | S3-compatible object storage |
+
+---
+
+## Useful Commands
+
+```bash
+# Check system health
+curl http://localhost:8000/health
+
+# List bucket contents
+python tools/debug_bucket_contents.py
+
+# Batch index all images
+python tools/batch_indexer.py
+
+# Clean up stale DB entries (images deleted from bucket)
+python tools/cleanup_stale_entries.py --dry-run   # preview
+python tools/cleanup_stale_entries.py              # execute
+
+# Backfill missing thumbnails for AI/PDF files
+python tools/backfill_thumbnails.py
+
+# Check webhook status
+python tools/check_webhook_status.py
+```
+
+---
+
+## Docker Compose (Full Stack)
+
+To run everything in Docker (no local Python/Node needed):
+
+```bash
+docker-compose up -d
+```
+
+This starts: PostgreSQL, Redis, Backend API, Workers (×4), Frontend (Nginx)
+
+---
+
+## Key Files
+
+| File | Purpose |
+|---|---|
+| `app.py` | FastAPI application — search, health, webhook endpoints |
+| `core/embedding.py` | CLIP model for generating image embeddings |
+| `core/preprocessor.py` | Image format conversion (PDF, AI → RGB) |
+| `core/database.py` | SQLAlchemy models + pgvector integration |
+| `core/task_queue.py` | Redis Queue job management |
+| `utils/minio_utils.py` | S3 client helpers + bucket key cache |
+| `utils/minio_config.py` | Environment-driven MinIO config |
+| `tools/batch_indexer.py` | Bulk index existing images |
+| `tools/cleanup_stale_entries.py` | Remove orphaned DB entries |
+| `frontend/` | React + Vite search UI |
+
+---
+
+## Security Notes
+
+- API endpoints are **unauthenticated** — intended for internal/firewalled deployments
+- Never commit `.env` to version control
+- Use strong passwords for `POSTGRES_PASSWORD` and `MINIO_ROOT_PASSWORD` in production
