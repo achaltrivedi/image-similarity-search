@@ -4,16 +4,20 @@ from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, HTMLResponse
 import os
+import io
+import base64
 import threading
 import json
 import hashlib
 import redis
+from PIL import Image
 from dotenv import load_dotenv
 
 # Load env vars from .env file (for local dev)
 load_dotenv()
 
 from core.embedding import ImageEmbedder
+from core.similarity_analyzer import explain_similarity
 from utils.minio_utils import get_s3_client, get_public_s3_client, get_bucket_keys
 from utils.minio_config import BUCKET_NAME
 from core.preprocessor import ImagePreprocessor
@@ -213,10 +217,16 @@ async def search_image(
         query_np = query_embedding.cpu().numpy()[0]
         query_vector = query_np.tolist()
         
-        # Generate unique query ID and cache embedding (5 min TTL)
+        # Generate unique query ID and cache embedding + image (5 min TTL)
         query_id = hashlib.md5(image_bytes).hexdigest()
+        query_image_for_explain = image  # Keep PIL image for similarity explainer
         try:
-            get_redis().setex(f"query:{query_id}", 300, json.dumps(query_vector))
+            r = get_redis()
+            r.setex(f"query:{query_id}", 300, json.dumps(query_vector))
+            # Cache the image too (for similarity explainer on paginated requests)
+            buf = io.BytesIO()
+            image.save(buf, format="PNG")
+            r.setex(f"query_img:{query_id}", 300, base64.b64encode(buf.getvalue()).decode())
         except Exception as e:
             print(f"Warning: Failed to cache query in Redis: {e}")
             # Search still works without caching, just can't paginate
@@ -262,11 +272,30 @@ async def search_image(
             s3 = None
             s3_available = False
         
+        # Recover query image for similarity explainer
+        # (available directly on first request, loaded from Redis cache on pagination)
+        if 'query_image_for_explain' not in dir():
+            query_image_for_explain = None
+            try:
+                cached_img = get_redis().get(f"query_img:{query_id}")
+                if cached_img:
+                    img_bytes = base64.b64decode(cached_img)
+                    query_image_for_explain = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+            except Exception:
+                pass  # Explainer tags will be empty if image not available
+        
+        # Use internal S3 client for downloading result images (for explainer)
+        try:
+            s3_internal = get_s3_client()
+        except Exception:
+            s3_internal = None
+        
         results = []
         for key, similarity in page_matches:
             image_url = None
             thumbnail_url = None
             download_url = None
+            similarity_tags = []
             
             if s3_available and s3:
                 try:
@@ -302,13 +331,24 @@ async def search_image(
 
                 except Exception as e:
                     print(f"Error generating presigned URL for {key}: {e}")
+            
+            # Similarity explainer: analyze WHY this image is similar
+            if query_image_for_explain and s3_internal:
+                try:
+                    obj = s3_internal.get_object(Bucket=BUCKET_NAME, Key=key)
+                    result_bytes = obj["Body"].read()
+                    result_pil = ImagePreprocessor.process(result_bytes, key)
+                    similarity_tags = explain_similarity(query_image_for_explain, result_pil)
+                except Exception as e:
+                    pass  # Skip explainer if download/analysis fails
 
             results.append({
                 "image_key": key,
                 "similarity": similarity,
                 "image_url": image_url,
                 "thumbnail_url": thumbnail_url,
-                "download_url": download_url
+                "download_url": download_url,
+                "similarity_tags": similarity_tags
             })
     finally:
         db.close()
