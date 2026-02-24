@@ -187,8 +187,4 @@ This starts: PostgreSQL, Redis, Backend API, Workers (×4), Frontend (Nginx)
 
 ---
 
-## Security Notes
 
-- API endpoints are **unauthenticated** — intended for internal/firewalled deployments
-- Never commit `.env` to version control
-- Use strong passwords for `POSTGRES_PASSWORD` and `MINIO_ROOT_PASSWORD` in production
