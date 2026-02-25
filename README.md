@@ -75,16 +75,29 @@ docker-compose up -d db redis
 docker ps
 ```
 
-### 4. Start Backend
+### 4. Initialize Database
+
+When running the project on a new PC, the PostgreSQL database will be empty.
+You must initialize the `pgvector` extension and table schemas before starting the API:
 
 ```bash
 # With venv activated:
-uvicorn app:app --reload
+python tools/init_db.py
 ```
 
-Wait for: `Image Similarity Service is READY`
+### 5. Start Backend
 
-### 5. Start Frontend
+```bash
+# Terminal 1 - Start the API Server:
+uvicorn app:app --reload
+
+# Terminal 2 - Start the Background Worker (REQUIRED for ingestion/sync):
+python tools/run_worker.py
+```
+
+Wait for: `Image Similarity Service is READY` in the API terminal.
+
+### 6. Start Frontend
 
 ```bash
 cd frontend
@@ -94,7 +107,7 @@ npm run dev
 
 Frontend available at: **http://localhost:5173**
 
-### 6. Index Existing Images
+### 7. Index Existing Images
 
 ```bash
 # Verify bucket connection
@@ -104,7 +117,7 @@ python tools/debug_bucket_contents.py
 python tools/batch_indexer.py
 ```
 
-### 7. Test It
+### 8. Test It
 
 Open **http://localhost:5173**, upload an image, and search!
 
