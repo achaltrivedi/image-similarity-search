@@ -1,0 +1,142 @@
+# 🚀 InHouse-Indexed Search: Linux Deployment Guide
+
+This guide is explicitly tailored for the **DevOps/Infrastructure team** responsible for transitioning this Image Similarity Microservice from a Windows Local Development environment to a Production Linux Server.
+
+There are no logic errors in the code itself, but there are **critical environmental conditions** that must be precisely configured on Linux to prevent application failure.
+
+---
+
+> [!WARNING]
+> Failing to account for these 5 infrastructure differences between Windows OS and headless Linux OS will result in broken imports, failed queues, or inaccessible APIs.
+
+## 1. The OpenCV "Headless" Trap (Critical Import Crash)
+
+By default, the standard `opencv-python` package relies on OS-level graphical and windowing libraries. A standard Linux server will violently crash with an `ImportError: libGL.so.1: cannot open shared object file` the moment the app starts.
+
+### 🛠️ The Fix
+You have two options depending on how securely you control the Python environment:
+
+**Option A (Recommended): Swap the Dependency**
+In your [requirements.txt](file:///c:/Users/ACHAL.TRIVEDI/Downloads/InHouse-Indexed%20Search/requirements.txt) or `pyproject.toml`, replace the standard OpenCV package with the headless version:
+```diff
+- opencv-python==4.8.x
++ opencv-python-headless==4.8.x
+```
+*This requires zero system-level installations.*
+
+**Option B (System Level): Install the Libraries**
+If you are strictly using `pip install -r requirements.txt` with the standard package (or if it is built into the Dockerfile), you MUST install the underlying C-libraries via `apt`:
+```bash
+sudo apt-get update
+sudo apt-get install ffmpeg libsm6 libxext6 libglib2.0-0 -y
+```
+
+---
+
+## 2. Uvicorn Host Binding (Unreachable API Error)
+
+During local development, running `uvicorn app:app` binds the server exclusively to `localhost` (`127.0.0.1`). 
+If run this way on a Linux server, the API will be alive, but **impossible to reach** from any external computer, VPN, or reverse proxy (like Nginx).
+
+### 🛠️ The Fix
+You must explicitly bind the application to `0.0.0.0` (all interfaces) when launching the production server:
+```bash
+uvicorn app:app --host 0.0.0.0 --port 8000 --workers 4
+```
+
+---
+
+## 3. The Mandatory Worker Process (Silent Queue Death)
+
+The application architecture relies offloading heavy GPU tasks (image downloading, ML embedding, DB insertion) to a background Redis Queue (`RQ`). 
+
+If you solely start the FastAPI Web Server, the API will return HTTP 200/202 Success responses, but **the uploaded images will never be indexed**, and the "Sync Bucket" button will do nothing.
+
+### 🛠️ The Fix
+You must run *two* distinct processes in production. Use a process manager like `Systemd`, `Supervisor`, or `PM2`.
+
+**Process 1: The API Server**
+```bash
+uvicorn app:app --host 0.0.0.0 --port 8000
+```
+
+**Process 2: The GPU Worker**
+```bash
+python tools/run_worker.py
+```
+
+---
+
+## 4. Redis is a Hard Dependency
+
+Because we utilize `RQ` for the background task processing, a running Redis instance is non-negotiable. If Redis is missing, the API will throw HTTP 500 errors immediately upon attempting to enqueue a MinIO ingestion webhook or a manual bucket sync.
+
+### 🛠️ The Fix
+Ensure Redis is running globally on the Linux server or locally within your Docker network.
+```bash
+sudo apt-get install redis-server
+sudo systemctl enable redis-server
+sudo systemctl start redis-server
+```
+*Ensure your [.env](file:///c:/Users/ACHAL.TRIVEDI/Downloads/InHouse-Indexed%20Search/.env) file explicitly sets `REDIS_URL=redis://127.0.0.1:6379/0` (or the appropriate IP).*
+
+---
+
+## 5. Docker DNS (`host.docker.internal`) Failure
+
+If you choose to deploy via the provided [docker-compose.yml](file:///c:/Users/ACHAL.TRIVEDI/Downloads/InHouse-Indexed%20Search/docker-compose.yml) rather than a bare-metal Python environment:
+Windows/Mac versions of Docker Desktop magically route `host.docker.internal` to your physical computer's localhost. **Native Linux Docker does not support this.**
+
+If your PostgreSQL database or MinIO server is running directly on the Linux host (outside of Docker), the containers will fail to connect.
+
+### 🛠️ The Fix
+**Option A:** Use the actual IPv4 address of your Linux server in your [.env](file:///c:/Users/ACHAL.TRIVEDI/Downloads/InHouse-Indexed%20Search/.env) file mapping.
+```bash
+# BAD on Linux
+MINIO_ENDPOINT=http://host.docker.internal:9000
+
+# GOOD
+MINIO_ENDPOINT=http://192.168.1.150:9000
+```
+
+**Option B:** Explicitly configure your Docker Compose service to use host networking:
+```yaml
+services:
+  worker:
+    network_mode: "host"
+    environment:
+       MINIO_ENDPOINT=http://127.0.0.1:9000
+```
+
+---
+
+## 6. The Initial 1.6TB Batch Import
+
+When deploying to production for the first time, your PostgreSQL database will be empty, while your S3/MinIO bucket already contains your 1.6TB of historical images. 
+
+**Do NOT use the UI "Sync Bucket" button for the initial 1.6TB load.** While it uses a 24-hour timeout, web servers and intermediate reverse proxies (like Nginx) often terminate long-running HTTP connections. 
+
+### 🛠️ The Fix: CLI Triggering
+For the massive initial ingestion (which will take several hours or days depending on your GPU), you should trigger the batch indexer directly from the Linux terminal in a persistent session (like `tmux` or `screen`).
+
+1. Open a persistent terminal session:
+```bash
+tmux new -s initial_index
+```
+2. Run the batch indexer directly (bypassing the web API and Redis queue):
+```bash
+# Ensure you are in your python virtual environment
+python -c "from tools.batch_indexer import batch_index_images; batch_index_images(force_reindex=False)"
+```
+3. You can safely detach from the `tmux` session by pressing `Ctrl+B`, then `D`. The server will crunch the 1.6TB load in the background.
+
+*Once this initial load is completed, you can rely entirely on the automatic Webhooks and the UI's "Sync Bucket" button for all future additions.*
+
+---
+
+## ✅ Final Production Sanity Checklist
+Before declaring the deployment stable, verify:
+1. [ ] `curl http://YOUR_LINUX_IP:8000/` returns the HTML UI.
+2. [ ] The [run_worker.py](file:///c:/Users/ACHAL.TRIVEDI/Downloads/InHouse-Indexed%20Search/tools/run_worker.py) terminal output says it successfully connected to Redis.
+3. [ ] Uploading an image to MinIO triggers a log statement in the [run_worker.py](file:///c:/Users/ACHAL.TRIVEDI/Downloads/InHouse-Indexed%20Search/tools/run_worker.py) process.
+4. [ ] There are no `libGL.so.1` errors in the application startup logs.

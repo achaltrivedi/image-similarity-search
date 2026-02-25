@@ -81,7 +81,7 @@ function App() {
                     <div className="flex items-center justify-between">
                         <div>
                             <h1 className="text-2xl font-semibold text-gray-900">
-                                Global Design Search
+                                Image Similarity Search
                             </h1>
                             <p className="text-sm text-gray-500 mt-1">
                                 Find similar visual patterns, textures, and colors across all collections
@@ -91,7 +91,7 @@ function App() {
                             <img
                                 src="/patterns-logo.png"
                                 alt="Patterns Logo"
-                                className="h-10 w-auto"
+                                className="h-8 w-auto"
                             />
                         </div>
                     </div>

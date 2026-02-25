@@ -465,6 +465,21 @@ async def minio_webhook(request: Request):
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 
+@app.post("/sync_bucket")
+async def sync_bucket():
+    """
+    Manually triggers a background job to scan the MinIO bucket and index missing images.
+    Uses a Redis lock to ensure only one sync can run at a time.
+    """
+    try:
+        result = enqueue_full_sync()
+        status_code = 202 if result.get("status") == "started" else 200
+        return JSONResponse(status_code=status_code, content=result)
+    except Exception as e:
+        print(f"Error starting sync: {e}")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
 @app.get("/", response_class=None)
 def home():
         """Minimal web UI for quick manual testing."""
