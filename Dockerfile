@@ -2,12 +2,10 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# apt dependencies removed for build stability. 
-# Re-enable if you add OpenCV or other libs requiring system .so files.
-# RUN apt-get update && apt-get install -y \
-#     libgl1-mesa-glx \
-#     libglib2.0-0 \
-#     && rm -rf /var/lib/apt/lists/*
+# System deps required by opencv-python-headless
+RUN apt-get update && apt-get install -y \
+    libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
 
 # Install PyTorch separately using the official wheel index (faster download)
 # We use --no-cache-dir to keep image size small, but Docker layer caching handles rebuilds

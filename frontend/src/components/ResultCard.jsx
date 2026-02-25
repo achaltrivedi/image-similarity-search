@@ -25,6 +25,15 @@ export default function ResultCard({ result, rank }) {
     const similarity = (result.similarity * 100).toFixed(1)
     const scores = result.similarity_scores || {}
 
+    const formatBytes = (bytes) => {
+        if (!bytes) return 'Unknown Size'
+        if (bytes === 0) return '0 B'
+        const k = 1024
+        const sizes = ['B', 'KB', 'MB', 'GB']
+        const i = Math.floor(Math.log(bytes) / Math.log(k))
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i]
+    }
+
     return (
         <div className="bg-white rounded-lg border border-gray-200 overflow-hidden hover:shadow-lg transition-shadow duration-200">
             {/* Image Container */}
@@ -62,9 +71,19 @@ export default function ResultCard({ result, rank }) {
             {/* Card Content */}
             <div className="p-4">
                 {/* Filename */}
-                <h3 className="font-medium text-gray-900 text-sm mb-3 truncate" title={filename}>
+                <h3 className="font-medium text-gray-900 text-sm mb-1 truncate" title={filename}>
                     {filename}
                 </h3>
+
+                {/* S3 Path & File Size */}
+                <div className="flex flex-col gap-0.5 mb-3">
+                    <p className="text-xs text-gray-500 truncate" title={result.image_key}>
+                        📂 {result.image_key}
+                    </p>
+                    <p className="text-xs text-gray-500">
+                        📏 {formatBytes(result.file_size)}
+                    </p>
+                </div>
 
                 {/* Individual Similarity Scores */}
                 <div className="space-y-1.5 mb-3">

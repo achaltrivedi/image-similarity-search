@@ -37,7 +37,7 @@ def get_existing_keys() -> Set[str]:
     finally:
         db.close()
 
-def process_batch(embedder: ImageEmbedder, batch_keys: List[str], batch_images: List[Image.Image]) -> int:
+def process_batch(embedder: ImageEmbedder, batch_keys: List[str], batch_images: List[Image.Image], batch_sizes: List[int]) -> int:
     """Embeds and saves a batch of images."""
     if not batch_keys:
         return 0
@@ -50,7 +50,7 @@ def process_batch(embedder: ImageEmbedder, batch_keys: List[str], batch_images: 
 
         # Create DB objects with both CLIP + design embeddings
         db_objects = []
-        for key, embedding, image in zip(batch_keys, embeddings_list, batch_images):
+        for key, embedding, image, size in zip(batch_keys, embeddings_list, batch_images, batch_sizes):
             try:
                 design_vec = extract_design_features(image)
             except Exception:
@@ -58,7 +58,8 @@ def process_batch(embedder: ImageEmbedder, batch_keys: List[str], batch_images: 
             db_objects.append(ImageEmbedding(
                 object_key=key,
                 embedding=embedding,
-                design_embedding=design_vec
+                design_embedding=design_vec,
+                minio_metadata={"file_size": size}
             ))
         
         save_batch_to_db(db_objects)
@@ -92,7 +93,17 @@ def batch_index_images(force_reindex: bool = False):
     print("=" * 60)
     print("🚀 STARTING GPU-ACCELERATED BATCH INDEXING")
     if force_reindex:
-        print("⚠️  FORCE RE-ROUTING ENABLED (Ignoring existing DB records)")
+        print("⚠️  FORCE RE-INDEX ENABLED (Clearing existing DB records)")
+        db = SessionLocal()
+        try:
+            db.query(ImageEmbedding).delete()
+            db.commit()
+            print("🗑️  Cleared existing database records for a fresh start.")
+        except Exception as e:
+            db.rollback()
+            print(f"Failed to clear DB: {e}")
+        finally:
+            db.close()
     print("=" * 60)
 
     # 1. Initialize components
@@ -114,6 +125,7 @@ def batch_index_images(force_reindex: bool = False):
 
     current_batch_keys: List[str] = []
     current_batch_images: List[Image.Image] = []
+    current_batch_sizes: List[int] = []
     
     total_processed = 0
     total_new = 0
@@ -153,6 +165,7 @@ def batch_index_images(force_reindex: bool = False):
                     # Add to batch buffers
                     current_batch_keys.append(key)
                     current_batch_images.append(image)
+                    current_batch_sizes.append(len(file_bytes))
 
                     # --- THUMBNAIL GENERATION ---
                     try:
@@ -174,7 +187,7 @@ def batch_index_images(force_reindex: bool = False):
                     # Process batch if full
                     if len(current_batch_keys) >= BATCH_SIZE:
                         print(f"\n⚡ Processing batch of {len(current_batch_keys)} items...")
-                        count = process_batch(embedder, current_batch_keys, current_batch_images)
+                        count = process_batch(embedder, current_batch_keys, current_batch_images, current_batch_sizes)
                         total_new += count
                         
                         elapsed = time.time() - start_time
@@ -184,6 +197,7 @@ def batch_index_images(force_reindex: bool = False):
                         # Reset buffers
                         current_batch_keys = []
                         current_batch_images = []
+                        current_batch_sizes = []
 
                 except Exception as e:
                     print(f"\n⚠️ Error preparing {key}: {e}")
@@ -192,7 +206,7 @@ def batch_index_images(force_reindex: bool = False):
         # Final batch commit
         if current_batch_keys:
             print(f"\n⚡ Processing final batch of {len(current_batch_keys)} items...")
-            count = process_batch(embedder, current_batch_keys, current_batch_images)
+            count = process_batch(embedder, current_batch_keys, current_batch_images, current_batch_sizes)
             total_new += count
             print(f"✅ Final batch committed.")
 

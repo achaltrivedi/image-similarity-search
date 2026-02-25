@@ -167,6 +167,10 @@ async def search_image(
     """
     global embedder
     
+    # Initialize variables used in both first-request and paginated paths
+    query_design_vector = None
+    query_image_for_explain = None
+    
     # Lazy load embedder
     if embedder is None:
         print("Loading embedder lazily...")
@@ -248,8 +252,7 @@ async def search_image(
         bucket_keys = None  # Skip filtering if bucket is unreachable
     
     # Recover design query vector (for paginated requests)
-    if 'query_design_vector' not in dir():
-        query_design_vector = None
+    if query_design_vector is None:
         try:
             cached_dv = get_redis().get(f"query_design:{query_id}")
             if cached_dv:
@@ -268,14 +271,16 @@ async def search_image(
             results_query = db.query(
                 ImageEmbedding.object_key,
                 clip_distance,
-                design_distance
+                design_distance,
+                ImageEmbedding.minio_metadata
             ).filter(
                 ImageEmbedding.embedding.cosine_distance(query_vector) <= (1 - similarity_threshold)
             ).order_by('clip_distance')  # Initial ordering by CLIP, re-sorted below
         else:
             results_query = db.query(
                 ImageEmbedding.object_key,
-                clip_distance
+                clip_distance,
+                ImageEmbedding.minio_metadata
             ).filter(
                 ImageEmbedding.embedding.cosine_distance(query_vector) <= (1 - similarity_threshold)
             ).order_by('clip_distance')
@@ -293,7 +298,12 @@ async def search_image(
             if query_design_vector and hasattr(row, 'design_distance') and row.design_distance is not None:
                 design_sim = float(1 - row.design_distance)
             
-            all_matches.append((row.object_key, clip_sim, design_sim))
+            # Extract file size
+            file_size = None
+            if hasattr(row, 'minio_metadata') and row.minio_metadata:
+                file_size = row.minio_metadata.get("file_size")
+            
+            all_matches.append((row.object_key, clip_sim, design_sim, file_size))
         
         # Sort by CLIP similarity (overall) — pure semantic ranking
         all_matches.sort(key=lambda x: x[1], reverse=True)
@@ -316,15 +326,14 @@ async def search_image(
         
         # Recover query image for similarity explainer
         # (available directly on first request, loaded from Redis cache on pagination)
-        if 'query_image_for_explain' not in dir():
-            query_image_for_explain = None
+        if query_image_for_explain is None:
             try:
                 cached_img = get_redis().get(f"query_img:{query_id}")
                 if cached_img:
                     img_bytes = base64.b64decode(cached_img)
                     query_image_for_explain = Image.open(io.BytesIO(img_bytes)).convert("RGB")
             except Exception:
-                pass  # Explainer tags will be empty if image not available
+                pass  # Scores will be empty if image not available
         
         # Use internal S3 client for downloading result images (for explainer)
         try:
@@ -333,7 +342,7 @@ async def search_image(
             s3_internal = None
         
         results = []
-        for key, similarity, design_sim in page_matches:
+        for key, similarity, design_sim, file_size in page_matches:
             image_url = None
             thumbnail_url = None
             download_url = None
@@ -392,7 +401,8 @@ async def search_image(
                 "image_url": image_url,
                 "thumbnail_url": thumbnail_url,
                 "download_url": download_url,
-                "similarity_scores": similarity_scores
+                "similarity_scores": similarity_scores,
+                "file_size": file_size
             })
     finally:
         db.close()

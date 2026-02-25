@@ -61,6 +61,7 @@ def process_minio_record(record: dict) -> dict:
     # 1. Download image
     response = s3.get_object(Bucket=BUCKET_NAME, Key=object_key)
     file_bytes = response['Body'].read()
+    file_size = len(file_bytes)
 
     # 2. Preprocess (converts to RGB Image)
     image = ImagePreprocessor.process(file_bytes, object_key)
@@ -97,11 +98,13 @@ def process_minio_record(record: dict) -> dict:
         if existing:
             existing.embedding = embedding_list
             existing.design_embedding = design_vec
+            existing.minio_metadata = {"file_size": file_size}
         else:
             db.add(ImageEmbedding(
                 object_key=object_key,
                 embedding=embedding_list,
-                design_embedding=design_vec
+                design_embedding=design_vec,
+                minio_metadata={"file_size": file_size}
             ))
         db.commit()
         print(f"[worker] Indexed/upserted {object_key}")
