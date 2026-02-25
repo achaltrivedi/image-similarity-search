@@ -23,6 +23,7 @@ from utils.minio_utils import get_s3_client, get_public_s3_client, get_bucket_ke
 from utils.minio_config import BUCKET_NAME
 from core.preprocessor import ImagePreprocessor
 from fastapi import Request
+from core.task_queue import enqueue_minio_record, queue_health, enqueue_full_sync
 from core.database import SessionLocal, ImageEmbedding, init_db
 from core.task_queue import enqueue_minio_record, queue_health
 

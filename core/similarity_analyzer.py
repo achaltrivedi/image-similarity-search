@@ -88,7 +88,6 @@ def _texture_score(query_cv2: np.ndarray, result_cv2: np.ndarray) -> float:
     var_r = float(np.var(result_gray))
     max_var = max(var_q, var_r, 1.0)
     var_sim = 1.0 - abs(var_q - var_r) / max_var
-
     score = 0.6 * max(0.0, hist_corr) + 0.4 * var_sim
     return max(0.0, min(1.0, score))
 

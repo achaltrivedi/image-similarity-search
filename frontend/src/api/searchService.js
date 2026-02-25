@@ -37,3 +37,15 @@ export async function searchNextPage(queryId, page, pageSize = 50, similarityThr
 
     return await response.json()
 }
+
+export async function syncBucket() {
+    const response = await fetch(`${API_BASE_URL}/sync_bucket`, {
+        method: 'POST',
+    })
+
+    if (!response.ok) {
+        throw new Error(`Sync failed: ${response.statusText}`)
+    }
+
+    return await response.json()
+}
