@@ -1,4 +1,3 @@
-# Image Similarity Search Microservice
 
 ## Overview
 A production-ready image similarity search microservice that ingests, indexes, and retrieves visually similar graphical assets at scale. Built to handle 300k+ images stored in S3-compatible object storage (MinIO), with real-time webhook-driven ingestion.
