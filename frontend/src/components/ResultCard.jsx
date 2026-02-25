@@ -2,28 +2,28 @@ import { Eye, Download } from 'lucide-react'
 import { Button } from './ui/button'
 import { Badge } from './ui/badge'
 
-const TAG_STYLES = {
-    Color: 'bg-blue-50 text-blue-700 border-blue-200',
-    Design: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-    Texture: 'bg-purple-50 text-purple-700 border-purple-200',
+const SCORE_CONFIG = [
+    { key: 'design', label: 'Design', icon: '📐', color: 'emerald' },
+    { key: 'color', label: 'Color', icon: '🎨', color: 'blue' },
+    { key: 'texture', label: 'Texture', icon: '🔲', color: 'purple' },
+]
+
+const BAR_COLORS = {
+    emerald: 'bg-emerald-500',
+    blue: 'bg-blue-500',
+    purple: 'bg-purple-500',
 }
 
-const PRIORITY_STYLES = {
-    High: 'font-bold',
-    Medium: 'font-medium',
-    Low: 'font-normal opacity-80',
-}
-
-const PRIORITY_DOT = {
-    High: 'bg-red-500',
-    Medium: 'bg-yellow-500',
-    Low: 'bg-gray-400',
+const LABEL_COLORS = {
+    emerald: 'text-emerald-700',
+    blue: 'text-blue-700',
+    purple: 'text-purple-700',
 }
 
 export default function ResultCard({ result, rank }) {
     const filename = result.image_key?.split('/').pop() || 'Unknown'
     const similarity = (result.similarity * 100).toFixed(1)
-    const tags = result.similarity_tags || []
+    const scores = result.similarity_scores || {}
 
     return (
         <div className="bg-white rounded-lg border border-gray-200 overflow-hidden hover:shadow-lg transition-shadow duration-200">
@@ -51,7 +51,7 @@ export default function ResultCard({ result, rank }) {
                     #{rank}
                 </Badge>
 
-                {/* Similarity Badge */}
+                {/* Overall Similarity Badge */}
                 <Badge
                     className="absolute top-2 right-2 bg-blue-600 text-white font-semibold"
                 >
@@ -62,25 +62,34 @@ export default function ResultCard({ result, rank }) {
             {/* Card Content */}
             <div className="p-4">
                 {/* Filename */}
-                <h3 className="font-medium text-gray-900 text-sm mb-2 truncate" title={filename}>
+                <h3 className="font-medium text-gray-900 text-sm mb-3 truncate" title={filename}>
                     {filename}
                 </h3>
 
-                {/* Similarity Explanation Tags */}
-                {tags.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5 mb-3">
-                        {tags.map((tag, i) => (
-                            <span
-                                key={i}
-                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs border ${TAG_STYLES[tag.label] || 'bg-gray-50 text-gray-600 border-gray-200'} ${PRIORITY_STYLES[tag.priority] || ''}`}
-                                title={`${tag.label} similarity: ${(tag.score * 100).toFixed(0)}% (${tag.priority} Priority)`}
-                            >
-                                <span className={`inline-block w-1.5 h-1.5 rounded-full ${PRIORITY_DOT[tag.priority] || 'bg-gray-400'}`} />
-                                {tag.icon} {tag.label}: {tag.priority}
-                            </span>
-                        ))}
-                    </div>
-                )}
+                {/* Individual Similarity Scores */}
+                <div className="space-y-1.5 mb-3">
+                    {SCORE_CONFIG.map(({ key, label, icon, color }) => {
+                        const score = scores[key]
+                        if (score == null) return null
+                        const pct = (score * 100).toFixed(0)
+                        return (
+                            <div key={key} className="flex items-center gap-2">
+                                <span className={`text-xs w-16 ${LABEL_COLORS[color]} font-medium`}>
+                                    {icon} {label}
+                                </span>
+                                <div className="flex-1 bg-gray-100 rounded-full h-1.5">
+                                    <div
+                                        className={`h-1.5 rounded-full ${BAR_COLORS[color]} transition-all duration-300`}
+                                        style={{ width: `${Math.min(100, pct)}%` }}
+                                    />
+                                </div>
+                                <span className="text-xs text-gray-500 w-8 text-right font-mono">
+                                    {pct}%
+                                </span>
+                            </div>
+                        )
+                    })}
+                </div>
 
                 {/* Action Buttons */}
                 <div className="flex gap-2">

@@ -19,6 +19,7 @@ load_dotenv(PROJECT_ROOT / ".env")
 from core.database import SessionLocal, ImageEmbedding
 from core.embedding import ImageEmbedder
 from core.preprocessor import ImagePreprocessor
+from core.design_features import extract_design_features
 from utils.minio_utils import get_s3_client, SUPPORTED_IMAGE_EXTENSIONS
 from utils.minio_config import BUCKET_NAME
 
@@ -47,12 +48,17 @@ def process_batch(embedder: ImageEmbedder, batch_keys: List[str], batch_images: 
         embedding_tensor = embedder.embed_images(batch_images)
         embeddings_list = embedding_tensor.cpu().numpy().tolist()
 
-        # Create DB objects
+        # Create DB objects with both CLIP + design embeddings
         db_objects = []
-        for key, embedding in zip(batch_keys, embeddings_list):
+        for key, embedding, image in zip(batch_keys, embeddings_list, batch_images):
+            try:
+                design_vec = extract_design_features(image)
+            except Exception:
+                design_vec = None  # Store without design features if extraction fails
             db_objects.append(ImageEmbedding(
                 object_key=key,
-                embedding=embedding
+                embedding=embedding,
+                design_embedding=design_vec
             ))
         
         save_batch_to_db(db_objects)

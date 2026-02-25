@@ -18,6 +18,7 @@ load_dotenv()
 
 from core.embedding import ImageEmbedder
 from core.similarity_analyzer import explain_similarity
+from core.design_features import extract_design_features
 from utils.minio_utils import get_s3_client, get_public_s3_client, get_bucket_keys
 from utils.minio_config import BUCKET_NAME
 from core.preprocessor import ImagePreprocessor
@@ -217,12 +218,20 @@ async def search_image(
         query_np = query_embedding.cpu().numpy()[0]
         query_vector = query_np.tolist()
         
-        # Generate unique query ID and cache embedding + image (5 min TTL)
+        # Generate design feature vector for structural search
+        try:
+            query_design_vector = extract_design_features(image)
+        except Exception:
+            query_design_vector = None
+        
+        # Generate unique query ID and cache embedding + design + image (5 min TTL)
         query_id = hashlib.md5(image_bytes).hexdigest()
         query_image_for_explain = image  # Keep PIL image for similarity explainer
         try:
             r = get_redis()
             r.setex(f"query:{query_id}", 300, json.dumps(query_vector))
+            if query_design_vector:
+                r.setex(f"query_design:{query_id}", 300, json.dumps(query_design_vector))
             # Cache the image too (for similarity explainer on paginated requests)
             buf = io.BytesIO()
             image.save(buf, format="PNG")
@@ -238,23 +247,56 @@ async def search_image(
         print(f"Warning: Could not fetch bucket keys, skipping existence filter: {e}")
         bucket_keys = None  # Skip filtering if bucket is unreachable
     
-    # Query PostgreSQL — fetch ALL matching results (pagination done in Python after filtering)
+    # Recover design query vector (for paginated requests)
+    if 'query_design_vector' not in dir():
+        query_design_vector = None
+        try:
+            cached_dv = get_redis().get(f"query_design:{query_id}")
+            if cached_dv:
+                query_design_vector = json.loads(cached_dv)
+        except Exception:
+            pass
+    
+    # Query PostgreSQL — fetch ALL matching results with both distances
     db = SessionLocal()
     try:
-        # Get all matching results ordered by similarity
-        results_query = db.query(
-            ImageEmbedding.object_key,
-            ImageEmbedding.embedding.cosine_distance(query_vector).label('distance')
-        ).filter(
-            ImageEmbedding.embedding.cosine_distance(query_vector) <= (1 - similarity_threshold)
-        ).order_by('distance')
+        # Build query with CLIP distance + optional design distance
+        clip_distance = ImageEmbedding.embedding.cosine_distance(query_vector).label('clip_distance')
         
-        # Filter: only keep results whose key exists in the bucket
+        if query_design_vector:
+            design_distance = ImageEmbedding.design_embedding.cosine_distance(query_design_vector).label('design_distance')
+            results_query = db.query(
+                ImageEmbedding.object_key,
+                clip_distance,
+                design_distance
+            ).filter(
+                ImageEmbedding.embedding.cosine_distance(query_vector) <= (1 - similarity_threshold)
+            ).order_by('clip_distance')  # Initial ordering by CLIP, re-sorted below
+        else:
+            results_query = db.query(
+                ImageEmbedding.object_key,
+                clip_distance
+            ).filter(
+                ImageEmbedding.embedding.cosine_distance(query_vector) <= (1 - similarity_threshold)
+            ).order_by('clip_distance')
+        
+        # Filter results — rank by CLIP similarity (overall)
         all_matches = []
         for row in results_query:
             if bucket_keys is not None and row.object_key not in bucket_keys:
                 continue  # Skip — image no longer in bucket
-            all_matches.append((row.object_key, float(1 - row.distance)))
+            
+            clip_sim = float(1 - row.clip_distance)
+            
+            # Design similarity for display (not ranking)
+            design_sim = None
+            if query_design_vector and hasattr(row, 'design_distance') and row.design_distance is not None:
+                design_sim = float(1 - row.design_distance)
+            
+            all_matches.append((row.object_key, clip_sim, design_sim))
+        
+        # Sort by CLIP similarity (overall) — pure semantic ranking
+        all_matches.sort(key=lambda x: x[1], reverse=True)
         
         # Paginate the filtered results in Python
         total_results = len(all_matches)
@@ -291,11 +333,11 @@ async def search_image(
             s3_internal = None
         
         results = []
-        for key, similarity in page_matches:
+        for key, similarity, design_sim in page_matches:
             image_url = None
             thumbnail_url = None
             download_url = None
-            similarity_tags = []
+            similarity_scores = {"design": design_sim}  # From DB (design_embedding)
             
             if s3_available and s3:
                 try:
@@ -332,15 +374,17 @@ async def search_image(
                 except Exception as e:
                     print(f"Error generating presigned URL for {key}: {e}")
             
-            # Similarity explainer: analyze WHY this image is similar
+            # Get color + texture scores from image analysis
             if query_image_for_explain and s3_internal:
                 try:
                     obj = s3_internal.get_object(Bucket=BUCKET_NAME, Key=key)
                     result_bytes = obj["Body"].read()
                     result_pil = ImagePreprocessor.process(result_bytes, key)
-                    similarity_tags = explain_similarity(query_image_for_explain, result_pil)
-                except Exception as e:
-                    pass  # Skip explainer if download/analysis fails
+                    color_score, texture_score = explain_similarity(query_image_for_explain, result_pil)
+                    similarity_scores["color"] = color_score
+                    similarity_scores["texture"] = texture_score
+                except Exception:
+                    pass  # Scores remain None if analysis fails
 
             results.append({
                 "image_key": key,
@@ -348,7 +392,7 @@ async def search_image(
                 "image_url": image_url,
                 "thumbnail_url": thumbnail_url,
                 "download_url": download_url,
-                "similarity_tags": similarity_tags
+                "similarity_scores": similarity_scores
             })
     finally:
         db.close()

@@ -101,43 +101,30 @@ _ASPECTS = [
 ]
 
 
-def explain_similarity(query_image: Image.Image, result_image: Image.Image) -> list[dict]:
-    """Analyze why two images are similar.
+def explain_similarity(query_image: Image.Image, result_image: Image.Image) -> tuple[float, float]:
+    """Compute color and texture similarity scores between two images.
     
+    Design similarity is handled separately via design_embedding in pgvector.
+    This function provides the remaining two aspect scores.
+
     Args:
         query_image: The uploaded search query (PIL Image, RGB).
         result_image: A search result image (PIL Image, RGB).
     
     Returns:
-        List of similarity tags sorted by score, e.g.:
-        [{"label": "Color", "icon": "🎨", "score": 0.87}, ...]
-        Only tags above their threshold are included.
+        Tuple of (color_score, texture_score), each 0-1.
     """
     query_cv2 = _pil_to_cv2(query_image)
     result_cv2 = _pil_to_cv2(result_image)
 
-    tags = []
-    for aspect in _ASPECTS:
-        try:
-            score = aspect["fn"](query_cv2, result_cv2)
-            if score >= aspect["threshold"]:
-                # Map score to priority level
-                if score >= 0.70:
-                    priority = "High"
-                elif score >= 0.50:
-                    priority = "Medium"
-                else:
-                    priority = "Low"
-                
-                tags.append({
-                    "label": aspect["label"],
-                    "icon": aspect["icon"],
-                    "score": round(score, 2),
-                    "priority": priority
-                })
-        except Exception:
-            continue  # Skip if analysis fails for this aspect
+    try:
+        color = _color_score(query_cv2, result_cv2)
+    except Exception:
+        color = 0.0
 
-    # Sort by score descending, keep top 2
-    tags.sort(key=lambda t: t["score"], reverse=True)
-    return tags[:2]
+    try:
+        texture = _texture_score(query_cv2, result_cv2)
+    except Exception:
+        texture = 0.0
+
+    return (round(color, 3), round(texture, 3))

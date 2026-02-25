@@ -30,7 +30,8 @@ class ImageEmbedding(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     object_key = Column(String, unique=True, index=True, nullable=False)
-    embedding = Column(Vector(768))  # CLIP ViT-B/32
+    embedding = Column(Vector(768))  # CLIP ViT-B/32 (semantic)
+    design_embedding = Column(Vector(256), nullable=True)  # Edge density grid (structural)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     minio_metadata = Column(JSONB, nullable=True)
 
@@ -46,6 +47,15 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_image_embeddings_vector 
             ON image_embeddings 
             USING hnsw (embedding vector_cosine_ops) 
+            WITH (m = 16, ef_construction = 128);
+            """
+            conn.execute(text(index_sql))
+            
+            # HNSW index for design embeddings (structural similarity)
+            index_sql = """
+            CREATE INDEX IF NOT EXISTS idx_image_embeddings_design_vector 
+            ON image_embeddings 
+            USING hnsw (design_embedding vector_cosine_ops) 
             WITH (m = 16, ef_construction = 128);
             """
             conn.execute(text(index_sql))

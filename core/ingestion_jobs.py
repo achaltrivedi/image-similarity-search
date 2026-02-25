@@ -5,6 +5,7 @@ from urllib.parse import unquote_plus
 from core.database import SessionLocal, ImageEmbedding
 from core.embedding import ImageEmbedder
 from core.preprocessor import ImagePreprocessor
+from core.design_features import extract_design_features
 from utils.minio_config import BUCKET_NAME
 from utils.minio_utils import SUPPORTED_IMAGE_EXTENSIONS, get_s3_client
 
@@ -80,18 +81,28 @@ def process_minio_record(record: dict) -> dict:
     except Exception as e:
         print(f"[worker] Failed to create thumbnail: {e}")
 
-    # 4. Generate Embedding
+    # 4. Generate Embeddings (CLIP + Design)
     embedder = _get_embedder()
-    embedding = embedder.embed_images([image]) # Changed to embed_images to match original API usage
+    embedding = embedder.embed_images([image])
     embedding_list = embedding.cpu().numpy()[0].tolist()
+    
+    try:
+        design_vec = extract_design_features(image)
+    except Exception:
+        design_vec = None
 
     db = SessionLocal()
     try:
         existing = db.query(ImageEmbedding).filter_by(object_key=object_key).first()
         if existing:
             existing.embedding = embedding_list
+            existing.design_embedding = design_vec
         else:
-            db.add(ImageEmbedding(object_key=object_key, embedding=embedding_list))
+            db.add(ImageEmbedding(
+                object_key=object_key,
+                embedding=embedding_list,
+                design_embedding=design_vec
+            ))
         db.commit()
         print(f"[worker] Indexed/upserted {object_key}")
         return {"status": "indexed", "object_key": object_key}
