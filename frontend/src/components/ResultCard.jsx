@@ -1,11 +1,11 @@
-import { Eye, Download } from 'lucide-react'
+import { Eye, Download, Ruler, Palette, Layers, Folder, HardDrive } from 'lucide-react'
 import { Button } from './ui/button'
 import { Badge } from './ui/badge'
 
 const SCORE_CONFIG = [
-    { key: 'design', label: 'Design', icon: '📐', color: 'emerald' },
-    { key: 'color', label: 'Color', icon: '🎨', color: 'blue' },
-    { key: 'texture', label: 'Texture', icon: '🔲', color: 'purple' },
+    { key: 'design', label: 'Design', icon: <Ruler className="w-3.5 h-3.5 md:w-4 md:h-4" />, color: 'emerald' },
+    { key: 'color', label: 'Color', icon: <Palette className="w-3.5 h-3.5 md:w-4 md:h-4" />, color: 'blue' },
+    { key: 'texture', label: 'Texture', icon: <Layers className="w-3.5 h-3.5 md:w-4 md:h-4" />, color: 'purple' },
 ]
 
 const BAR_COLORS = {
@@ -76,12 +76,12 @@ export default function ResultCard({ result, rank }) {
                 </h3>
 
                 {/* S3 Path & File Size */}
-                <div className="flex flex-col gap-0.5 mb-3">
-                    <p className="text-xs text-gray-500 truncate" title={result.image_key}>
-                        📂 {result.image_key}
+                <div className="flex flex-col gap-1 mb-3">
+                    <p className="flex items-center gap-1.5 text-xs text-gray-500 truncate" title={result.image_key}>
+                        <Folder className="shrink-0 w-3.5 h-3.5" /> {result.image_key}
                     </p>
-                    <p className="text-xs text-gray-500">
-                        📏 {formatBytes(result.file_size)}
+                    <p className="flex items-center gap-1.5 text-xs text-gray-500">
+                        <HardDrive className="shrink-0 w-3.5 h-3.5" /> {formatBytes(result.file_size)}
                     </p>
                 </div>
 
@@ -93,8 +93,9 @@ export default function ResultCard({ result, rank }) {
                         const pct = (score * 100).toFixed(0)
                         return (
                             <div key={key} className="flex items-center gap-2">
-                                <span className={`text-xs w-16 ${LABEL_COLORS[color]} font-medium`}>
-                                    {icon} {label}
+                                <span className={`flex items-center gap-1.5 text-xs w-[72px] ${LABEL_COLORS[color]} font-medium`}>
+                                    {icon}
+                                    <span>{label}</span>
                                 </span>
                                 <div className="flex-1 bg-gray-100 rounded-full h-1.5">
                                     <div
