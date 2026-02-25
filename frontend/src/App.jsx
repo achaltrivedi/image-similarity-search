@@ -87,20 +87,12 @@ function App() {
                                 Find similar visual patterns, textures, and colors across all collections
                             </p>
                         </div>
-                        <div className="flex items-center gap-4">
-                            {syncMessage && (
-                                <span className="text-sm text-blue-600 bg-blue-50 px-3 py-1.5 rounded-full animate-in fade-in transition-all">
-                                    {syncMessage}
-                                </span>
-                            )}
-                            <button
-                                onClick={handleSync}
-                                disabled={isSyncing}
-                                className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 transition-colors"
-                            >
-                                <RefreshCw className={`w-4 h-4 ${isSyncing ? 'animate-spin text-blue-600' : 'text-gray-500'}`} />
-                                {isSyncing ? 'Syncing...' : 'Sync Bucket'}
-                            </button>
+                        <div>
+                            <img
+                                src="/patterns-logo.png"
+                                alt="Patterns Logo"
+                                className="h-10 w-auto"
+                            />
                         </div>
                     </div>
                 </div>
@@ -108,10 +100,29 @@ function App() {
 
             {/* Main Content */}
             < main className="max-w-7xl mx-auto px-4 py-8" >
+                {/* Action Bar (above Search Box) */}
+                <div className="flex justify-end mb-4">
+                    <div className="flex items-center gap-4">
+                        {syncMessage && (
+                            <span className="text-sm text-blue-600 bg-blue-50 px-3 py-1.5 rounded-full animate-in fade-in transition-all shadow-sm border border-blue-100">
+                                {syncMessage}
+                            </span>
+                        )}
+                        <button
+                            onClick={handleSync}
+                            disabled={isSyncing}
+                            className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 shadow-sm transition-colors"
+                        >
+                            <RefreshCw className={`w-4 h-4 ${isSyncing ? 'animate-spin text-blue-600' : 'text-gray-500'}`} />
+                            {isSyncing ? 'Syncing...' : 'Sync Bucket'}
+                        </button>
+                    </div>
+                </div>
+
                 {/* Search Box */}
-                < div className="mb-8" >
+                <div className="mb-8">
                     <SearchBox onSearch={handleSearch} loading={loading} />
-                </div >
+                </div>
 
                 {/* Loading State */}
                 {
