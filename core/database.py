@@ -37,33 +37,50 @@ class ImageEmbedding(Base):
 
 def init_db():
     try:
-        # Ensure the vector extension is installed
+        # 1. Ensure the vector extension is installed
         with engine.connect() as conn:
             conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-            
-            # Create HNSW index for high-performance search at 300k+ scale
-            # vector_cosine_ops is used for cosine similarity (matching CLIP requirements)
-            index_sql = """
+            conn.commit()
+    except Exception as e:
+        print(f"Warning: Failed to create vector extension: {e}")
+
+    # 2. Create tables (only creates tables if they don't exist, does NOT alter them)
+    try:
+        Base.metadata.create_all(bind=engine)
+    except Exception as e:
+        print(f"Warning: Failed to create tables: {e}")
+
+    # 3. Add any missing columns to existing tables (specifically design_embedding)
+    #    and create high-performance generic indices
+    try:
+        with engine.connect() as conn:
+            # Force add design_embedding if the table existed before it was added
+            alter_sql = """
+            ALTER TABLE image_embeddings 
+            ADD COLUMN IF NOT EXISTS design_embedding vector(256);
+            """
+            conn.execute(text(alter_sql))
+
+            # Create HNSW index for high-performance search at 300k+ scale (semantic)
+            index_sql_clip = """
             CREATE INDEX IF NOT EXISTS idx_image_embeddings_vector 
             ON image_embeddings 
             USING hnsw (embedding vector_cosine_ops) 
             WITH (m = 16, ef_construction = 128);
             """
-            conn.execute(text(index_sql))
+            conn.execute(text(index_sql_clip))
             
-            # HNSW index for design embeddings (structural similarity)
-            index_sql = """
+            # Create HNSW index for design embeddings (structural)
+            index_sql_design = """
             CREATE INDEX IF NOT EXISTS idx_image_embeddings_design_vector 
             ON image_embeddings 
             USING hnsw (design_embedding vector_cosine_ops) 
             WITH (m = 16, ef_construction = 128);
             """
-            conn.execute(text(index_sql))
+            conn.execute(text(index_sql_design))
             conn.commit()
     except Exception as e:
-        print(f"Warning: Database initialization step failed: {e}")
-
-    Base.metadata.create_all(bind=engine)
+        print(f"Warning: Database column alteration or indexing failed: {e}")
 
 def get_db():
     db = SessionLocal()
