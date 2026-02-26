@@ -1,31 +1,58 @@
-FROM python:3.11-slim
+# ============================================================
+# Multi-stage Dockerfile for Image Similarity API + Worker
+# Optimized for minimal image size (~1.5GB vs 3.5GB)
+# ============================================================
 
-WORKDIR /app
+# ---------- Stage 1: Install dependencies ----------
+FROM python:3.11-slim AS builder
 
-# System deps required by opencv-python-headless
-RUN apt-get update && apt-get install -y \
+WORKDIR /build
+
+# System deps for opencv-python-headless
+RUN apt-get update && apt-get install -y --no-install-recommends \
     libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
-# Install PyTorch separately using the official wheel index (faster download)
-# We use --no-cache-dir to keep image size small, but Docker layer caching handles rebuilds
-RUN pip install --no-cache-dir torch>=2.0.0 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+# Install CPU-only PyTorch first (saves ~1.5GB vs full CUDA build)
+# Only 'torch' is needed — torchvision and torchaudio are NOT used
+RUN pip install --no-cache-dir --user \
+    torch --index-url https://download.pytorch.org/whl/cpu
 
-# Install Python dependencies (rest of them)
+# Install remaining Python dependencies
 COPY requirements.txt .
-# Remove torch from requirements.txt to avoid double install (or let pip skipping handle it)
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --user -r requirements.txt
 
-# Pre-download CLIP model during build (avoids ~600MB download on first startup)
-# This prevents health check timeouts and container restart loops
+# Pre-download CLIP model during build (~600MB, cached in Docker layer)
+# Prevents health check timeouts and container restart loops on first boot
 RUN python -c "\
+    import sys; sys.path.insert(0, '/root/.local/lib/python3.11/site-packages'); \
     from transformers import CLIPVisionModel, CLIPProcessor; \
     CLIPVisionModel.from_pretrained('openai/clip-vit-base-patch32', use_safetensors=True); \
     CLIPProcessor.from_pretrained('openai/clip-vit-base-patch32'); \
     print('CLIP model pre-downloaded successfully')"
 
-# Copy application code
+# ---------- Stage 2: Runtime (lean) ----------
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# System deps (runtime only)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libglib2.0-0 \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy installed packages from builder
+COPY --from=builder /root/.local /root/.local
+
+# Copy pre-downloaded HuggingFace model cache
+COPY --from=builder /root/.cache/huggingface /root/.cache/huggingface
+
+# Ensure pip-installed binaries are on PATH
+ENV PATH=/root/.local/bin:$PATH
+
+# Copy application code (respects .dockerignore)
 COPY . .
 
-# Default command (overridden in docker-compose)
+# Default command (overridden per service in docker-compose)
 CMD ["python", "tools/run_worker.py"]

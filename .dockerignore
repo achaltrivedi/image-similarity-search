@@ -1,11 +1,41 @@
-venv/
-__pycache__/
+# Version control
 .git/
+.gitignore
+
+# Frontend (has its own Dockerfile)
+frontend/node_modules/
+frontend/dist/
+
+# Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.venv/
+
+# Local environment
+.env
+.env.*
+
+# IDE
 .vscode/
-node_modules/
+.idea/
+
+# Test data & docs (not needed in production image)
+test_images/
+docs/
+*.md
+
+# Docker files
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Local data volumes
 minio_data/
 postgres_data/
 storage/
 images/
-*.pyc
-.env
+
+# Gemini/AI artifacts
+.gemini/
