@@ -6,6 +6,7 @@ from core.database import SessionLocal, ImageEmbedding
 from core.embedding import ImageEmbedder
 from core.preprocessor import ImagePreprocessor
 from core.design_features import extract_design_features
+from core.color_texture_features import extract_color_features, extract_texture_features
 from utils.minio_config import BUCKET_NAME
 from utils.minio_utils import SUPPORTED_IMAGE_EXTENSIONS, get_s3_client
 
@@ -89,8 +90,12 @@ def process_minio_record(record: dict) -> dict:
     
     try:
         design_vec = extract_design_features(image)
+        color_vec = extract_color_features(image)
+        texture_vec = extract_texture_features(image)
     except Exception:
         design_vec = None
+        color_vec = None
+        texture_vec = None
 
     db = SessionLocal()
     try:
@@ -98,12 +103,16 @@ def process_minio_record(record: dict) -> dict:
         if existing:
             existing.embedding = embedding_list
             existing.design_embedding = design_vec
+            existing.color_embedding = color_vec
+            existing.texture_embedding = texture_vec
             existing.minio_metadata = {"file_size": file_size}
         else:
             db.add(ImageEmbedding(
                 object_key=object_key,
                 embedding=embedding_list,
                 design_embedding=design_vec,
+                color_embedding=color_vec,
+                texture_embedding=texture_vec,
                 minio_metadata={"file_size": file_size}
             ))
         db.commit()

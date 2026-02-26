@@ -20,6 +20,7 @@ from core.database import SessionLocal, ImageEmbedding
 from core.embedding import ImageEmbedder
 from core.preprocessor import ImagePreprocessor
 from core.design_features import extract_design_features
+from core.color_texture_features import extract_color_features, extract_texture_features
 from utils.minio_utils import get_s3_client, SUPPORTED_IMAGE_EXTENSIONS
 from utils.minio_config import BUCKET_NAME
 
@@ -48,17 +49,24 @@ def process_batch(embedder: ImageEmbedder, batch_keys: List[str], batch_images: 
         embedding_tensor = embedder.embed_images(batch_images)
         embeddings_list = embedding_tensor.cpu().numpy().tolist()
 
-        # Create DB objects with both CLIP + design embeddings
+        # Create DB objects with all embeddings
         db_objects = []
         for key, embedding, image, size in zip(batch_keys, embeddings_list, batch_images, batch_sizes):
             try:
                 design_vec = extract_design_features(image)
+                color_vec = extract_color_features(image)
+                texture_vec = extract_texture_features(image)
             except Exception:
-                design_vec = None  # Store without design features if extraction fails
+                design_vec = None
+                color_vec = None
+                texture_vec = None
+                
             db_objects.append(ImageEmbedding(
                 object_key=key,
                 embedding=embedding,
                 design_embedding=design_vec,
+                color_embedding=color_vec,
+                texture_embedding=texture_vec,
                 minio_metadata={"file_size": size}
             ))
         

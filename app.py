@@ -17,7 +17,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from core.embedding import ImageEmbedder
-from core.similarity_analyzer import explain_similarity
+from core.color_texture_features import extract_color_features, extract_texture_features
 from core.design_features import extract_design_features
 from utils.minio_utils import get_s3_client, get_public_s3_client, get_bucket_keys
 from utils.minio_config import BUCKET_NAME
@@ -226,21 +226,24 @@ async def search_image(
         # Generate design feature vector for structural search
         try:
             query_design_vector = extract_design_features(image)
+            query_color = extract_color_features(image)
+            query_texture = extract_texture_features(image)
         except Exception:
             query_design_vector = None
+            query_color = None
+            query_texture = None
         
-        # Generate unique query ID and cache embedding + design + image (5 min TTL)
+        # Generate unique query ID and cache embeddings (5 min TTL)
         query_id = hashlib.md5(image_bytes).hexdigest()
-        query_image_for_explain = image  # Keep PIL image for similarity explainer
         try:
             r = get_redis()
             r.setex(f"query:{query_id}", 300, json.dumps(query_vector))
             if query_design_vector:
                 r.setex(f"query_design:{query_id}", 300, json.dumps(query_design_vector))
-            # Cache the image too (for similarity explainer on paginated requests)
-            buf = io.BytesIO()
-            image.save(buf, format="PNG")
-            r.setex(f"query_img:{query_id}", 300, base64.b64encode(buf.getvalue()).decode())
+            if query_color:
+                r.setex(f"query_color:{query_id}", 300, json.dumps(query_color))
+            if query_texture:
+                r.setex(f"query_texture:{query_id}", 300, json.dumps(query_texture))
         except Exception as e:
             print(f"Warning: Failed to cache query in Redis: {e}")
             # Search still works without caching, just can't paginate
@@ -252,14 +255,24 @@ async def search_image(
         print(f"Warning: Could not fetch bucket keys, skipping existence filter: {e}")
         bucket_keys = None  # Skip filtering if bucket is unreachable
     
-    # Recover design query vector (for paginated requests)
+    # Recover query vectors (for paginated requests)
     if query_design_vector is None:
         try:
-            cached_dv = get_redis().get(f"query_design:{query_id}")
+            r = get_redis()
+            cached_dv = r.get(f"query_design:{query_id}")
             if cached_dv:
                 query_design_vector = json.loads(cached_dv)
+                
+            cached_c = r.get(f"query_color:{query_id}")
+            if cached_c:
+                query_color = json.loads(cached_c)
+                
+            cached_t = r.get(f"query_texture:{query_id}")
+            if cached_t:
+                query_texture = json.loads(cached_t)
         except Exception:
-            pass
+            query_color = None
+            query_texture = None
     
     # Query PostgreSQL — fetch ALL matching results with both distances
     db = SessionLocal()
@@ -267,44 +280,54 @@ async def search_image(
         # Build query with CLIP distance + optional design distance
         clip_distance = ImageEmbedding.embedding.cosine_distance(query_vector).label('clip_distance')
         
+        # Build optional distance projections
+        projections = [
+            ImageEmbedding.object_key,
+            clip_distance,
+            ImageEmbedding.minio_metadata
+        ]
+        
         if query_design_vector:
-            design_distance = ImageEmbedding.design_embedding.cosine_distance(query_design_vector).label('design_distance')
-            results_query = db.query(
-                ImageEmbedding.object_key,
-                clip_distance,
-                design_distance,
-                ImageEmbedding.minio_metadata
-            ).filter(
-                ImageEmbedding.embedding.cosine_distance(query_vector) <= (1 - similarity_threshold)
-            ).order_by('clip_distance')  # Initial ordering by CLIP, re-sorted below
-        else:
-            results_query = db.query(
-                ImageEmbedding.object_key,
-                clip_distance,
-                ImageEmbedding.minio_metadata
-            ).filter(
-                ImageEmbedding.embedding.cosine_distance(query_vector) <= (1 - similarity_threshold)
-            ).order_by('clip_distance')
+            projections.append(ImageEmbedding.design_embedding.cosine_distance(query_design_vector).label('design_distance'))
+            
+        if query_color:
+            projections.append(ImageEmbedding.color_embedding.cosine_distance(query_color).label('color_distance'))
+            
+        if query_texture:
+            projections.append(ImageEmbedding.texture_embedding.cosine_distance(query_texture).label('texture_distance'))
+
+        results_query = db.query(*projections).filter(
+            ImageEmbedding.embedding.cosine_distance(query_vector) <= (1 - similarity_threshold)
+        ).order_by('clip_distance')
         
         # Filter results — rank by CLIP similarity (overall)
         all_matches = []
+        
         for row in results_query:
             if bucket_keys is not None and row.object_key not in bucket_keys:
                 continue  # Skip — image no longer in bucket
             
             clip_sim = float(1 - row.clip_distance)
             
-            # Design similarity for display (not ranking)
-            design_sim = None
+            # Extract similarities natively from DB
+            design_sim = 0.0
             if query_design_vector and hasattr(row, 'design_distance') and row.design_distance is not None:
                 design_sim = float(1 - row.design_distance)
+                
+            color_sim = 0.0
+            if query_color and hasattr(row, 'color_distance') and row.color_distance is not None:
+                color_sim = max(0.0, float(1 - row.color_distance))
+                
+            texture_sim = 0.0
+            if query_texture and hasattr(row, 'texture_distance') and row.texture_distance is not None:
+                texture_sim = max(0.0, float(1 - row.texture_distance))
             
             # Extract file size
             file_size = None
             if hasattr(row, 'minio_metadata') and row.minio_metadata:
                 file_size = row.minio_metadata.get("file_size")
             
-            all_matches.append((row.object_key, clip_sim, design_sim, file_size))
+            all_matches.append((row.object_key, clip_sim, design_sim, color_sim, texture_sim, file_size))
         
         # Sort by CLIP similarity (overall) — pure semantic ranking
         all_matches.sort(key=lambda x: x[1], reverse=True)
@@ -325,29 +348,16 @@ async def search_image(
             s3 = None
             s3_available = False
         
-        # Recover query image for similarity explainer
-        # (available directly on first request, loaded from Redis cache on pagination)
-        if query_image_for_explain is None:
-            try:
-                cached_img = get_redis().get(f"query_img:{query_id}")
-                if cached_img:
-                    img_bytes = base64.b64decode(cached_img)
-                    query_image_for_explain = Image.open(io.BytesIO(img_bytes)).convert("RGB")
-            except Exception:
-                pass  # Scores will be empty if image not available
-        
-        # Use internal S3 client for downloading result images (for explainer)
-        try:
-            s3_internal = get_s3_client()
-        except Exception:
-            s3_internal = None
-        
         results = []
-        for key, similarity, design_sim, file_size in page_matches:
+        for key, similarity, design_sim, color_sim, texture_sim, file_size in page_matches:
             image_url = None
             thumbnail_url = None
             download_url = None
-            similarity_scores = {"design": design_sim}  # From DB (design_embedding)
+            similarity_scores = {
+                "design": design_sim,
+                "color": round(color_sim, 3),
+                "texture": round(texture_sim, 3)
+            }
             
             if s3_available and s3:
                 try:
@@ -383,18 +393,6 @@ async def search_image(
 
                 except Exception as e:
                     print(f"Error generating presigned URL for {key}: {e}")
-            
-            # Get color + texture scores from image analysis
-            if query_image_for_explain and s3_internal:
-                try:
-                    obj = s3_internal.get_object(Bucket=BUCKET_NAME, Key=key)
-                    result_bytes = obj["Body"].read()
-                    result_pil = ImagePreprocessor.process(result_bytes, key)
-                    color_score, texture_score = explain_similarity(query_image_for_explain, result_pil)
-                    similarity_scores["color"] = color_score
-                    similarity_scores["texture"] = texture_score
-                except Exception:
-                    pass  # Scores remain None if analysis fails
 
             results.append({
                 "image_key": key,

@@ -32,6 +32,8 @@ class ImageEmbedding(Base):
     object_key = Column(String, unique=True, index=True, nullable=False)
     embedding = Column(Vector(768))  # CLIP ViT-B/32 (semantic)
     design_embedding = Column(Vector(256), nullable=True)  # Edge density grid (structural)
+    color_embedding = Column(Vector(256), nullable=True)   # HSV color histogram (color)
+    texture_embedding = Column(Vector(64), nullable=True)  # Grayscale histogram (texture)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     minio_metadata = Column(JSONB, nullable=True)
 
@@ -54,10 +56,12 @@ def init_db():
     #    and create high-performance generic indices
     try:
         with engine.connect() as conn:
-            # Force add design_embedding if the table existed before it was added
+            # Force add columns if the table existed before they were added
             alter_sql = """
             ALTER TABLE image_embeddings 
-            ADD COLUMN IF NOT EXISTS design_embedding vector(256);
+            ADD COLUMN IF NOT EXISTS design_embedding vector(256),
+            ADD COLUMN IF NOT EXISTS color_embedding vector(256),
+            ADD COLUMN IF NOT EXISTS texture_embedding vector(64);
             """
             conn.execute(text(alter_sql))
 
@@ -78,6 +82,25 @@ def init_db():
             WITH (m = 16, ef_construction = 128);
             """
             conn.execute(text(index_sql_design))
+
+            # Create HNSW index for color embeddings
+            index_sql_color = """
+            CREATE INDEX IF NOT EXISTS idx_image_embeddings_color_vector 
+            ON image_embeddings 
+            USING hnsw (color_embedding vector_cosine_ops) 
+            WITH (m = 16, ef_construction = 128);
+            """
+            conn.execute(text(index_sql_color))
+            
+            # Create HNSW index for texture embeddings
+            index_sql_texture = """
+            CREATE INDEX IF NOT EXISTS idx_image_embeddings_texture_vector 
+            ON image_embeddings 
+            USING hnsw (texture_embedding vector_cosine_ops) 
+            WITH (m = 16, ef_construction = 128);
+            """
+            conn.execute(text(index_sql_texture))
+            
             conn.commit()
     except Exception as e:
         print(f"Warning: Database column alteration or indexing failed: {e}")
