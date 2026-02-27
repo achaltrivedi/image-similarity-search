@@ -35,7 +35,7 @@ _minio_public_client = None
 # Cached bucket key set (refreshed every 5 minutes)
 _bucket_keys_cache = None
 _bucket_keys_timestamp = 0
-_BUCKET_CACHE_TTL = 300  # 5 minutes
+_BUCKET_CACHE_TTL = 30  # 30 seconds — short enough for newly ingested files to appear quickly
 
 
 def _parse_endpoint(endpoint_url: str):
@@ -105,6 +105,30 @@ def get_bucket_keys() -> frozenset:
         _bucket_keys_timestamp = now
         print(f"🔄 Bucket key cache refreshed: {len(keys)} objects")
     return _bucket_keys_cache
+
+
+def invalidate_bucket_keys_cache():
+    """Force the cache to refresh on the next call to get_bucket_keys()."""
+    global _bucket_keys_cache, _bucket_keys_timestamp
+    _bucket_keys_cache = None
+    _bucket_keys_timestamp = 0
+
+
+def add_to_bucket_keys_cache(key: str):
+    """Add a single key to the cache without re-listing the entire bucket.
+    
+    Called after successful ingestion so the new file appears in search immediately.
+    """
+    global _bucket_keys_cache
+    if _bucket_keys_cache is not None:
+        _bucket_keys_cache = _bucket_keys_cache | frozenset([key])
+
+
+def remove_from_bucket_keys_cache(key: str):
+    """Remove a key from the cache after deletion."""
+    global _bucket_keys_cache
+    if _bucket_keys_cache is not None:
+        _bucket_keys_cache = _bucket_keys_cache - frozenset([key])
 
 
 def list_image_keys(prefix: str | None = None):
