@@ -2,12 +2,15 @@
 .git/
 .gitignore
 
-# Frontend (has its own Dockerfile)
+# Frontend build artifacts & noise (source is needed for the frontend stage)
 frontend/node_modules/
 frontend/dist/
+frontend/*.log
+frontend/.DS_Store
 
 # Python artifacts
 __pycache__/
+**/__pycache__/
 *.pyc
 *.pyo
 venv/
@@ -23,6 +26,7 @@ venv/
 
 # Test data & docs (not needed in production image)
 test_images/
+tests/
 docs/
 *.md
 

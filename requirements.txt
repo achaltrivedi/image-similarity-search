@@ -1,4 +1,7 @@
 # Core ML / DL
+# CPU-only torch index — avoids pulling the large CUDA build (~3.5GB) from PyPI.
+# Works for both local dev and Docker builds.
+--extra-index-url https://download.pytorch.org/whl/cpu
 torch>=2.0.0
 transformers>=4.36.0
 safetensors>=0.4.0

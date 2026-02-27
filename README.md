@@ -1,14 +1,25 @@
+# Image Similarity Microservice
 
-## Overview
 A production-ready image similarity search microservice that ingests, indexes, and retrieves visually similar graphical assets at scale. Built to handle 300k+ images stored in S3-compatible object storage (MinIO), with real-time webhook-driven ingestion.
 
 **Supports:** PNG, JPEG, PDF, AI (Adobe Illustrator), GIF, TIFF, BMP, WebP
 
 ---
 
+## Table of Contents
+
+- [Quick Start](#quick-start-local-development)
+- [Architecture](#architecture)
+- [Docker Compose](#docker-compose-full-stack)
+- [Key Files](#key-files)
+- [Useful Commands](#useful-commands)
+
+---
+
 ## Quick Start (Local Development)
 
 ### Prerequisites
+
 - **Docker Desktop** (running)
 - **Python 3.10+**
 - **Node.js 18+** and npm
@@ -17,58 +28,54 @@ A production-ready image similarity search microservice that ingests, indexes, a
 ### 1. Clone & Setup
 
 ```bash
-# Clone the repo
 git clone https://github.com/achaltrivedi/image-similarity-microservice.git
 cd image-similarity-microservice
 
-# Create Python virtual environment
+# Create and activate Python virtual environment
 python -m venv venv
 
-# Activate it
 # Windows:
 venv\Scripts\activate
 # macOS/Linux:
 source venv/bin/activate
 
-# Install Python dependencies
 pip install -r requirements.txt
 ```
 
 ### 2. Configure `.env`
 
-Create a `.env` file in the project root (copy from `.env.example` if available):
+Create a `.env` file in the project root:
 
 ```env
-# --- Database ---
+# Database
 POSTGRES_USER=admin
 POSTGRES_PASSWORD=your_password
 POSTGRES_DB=vectordb
 POSTGRES_HOST=127.0.0.1
 POSTGRES_PORT=5434
 
-# --- MinIO (Object Storage) ---
+# MinIO (Object Storage)
 MINIO_ROOT_USER=your_minio_access_key
 MINIO_ROOT_PASSWORD=your_minio_secret_key
 MINIO_BUCKET_NAME=your_bucket_name
 MINIO_ENDPOINT=http://your-minio-host:9000
 MINIO_PUBLIC_ENDPOINT=http://your-minio-host:9000
 
-# --- Redis ---
+# Redis
 REDIS_URL=redis://127.0.0.1:6379/0
 
-# --- Application ---
+# Application
 WEBHOOK_SECRET=your_webhook_secret
 INGEST_QUEUE_BACKEND=rq
 INGEST_QUEUE_NAME=minio_ingestion
 
-# --- Hugging Face ---
+# Hugging Face
 HF_TOKEN=your_hf_token
 ```
 
-### 3. Start Infrastructure (Docker)
+### 3. Start Infrastructure
 
 ```bash
-# Start PostgreSQL (pgvector) + Redis
 docker-compose up -d db redis
 
 # Verify containers are running
@@ -76,9 +83,6 @@ docker ps
 ```
 
 ### 4. Initialize Database
-
-When running the project on a new PC, the PostgreSQL database will be empty.
-You must initialize the `pgvector` extension and table schemas before starting the API:
 
 ```bash
 # With venv activated:
@@ -88,14 +92,14 @@ python tools/init_db.py
 ### 5. Start Backend
 
 ```bash
-# Terminal 1 - Start the API Server:
+# Terminal 1 — API Server
 uvicorn app:app --reload
 
-# Terminal 2 - Start the Background Worker (REQUIRED for ingestion/sync):
+# Terminal 2 — Background Worker (required for ingestion)
 python tools/run_worker.py
 ```
 
-Wait for: `Image Similarity Service is READY` in the API terminal.
+Wait for `Image Similarity Service is READY` in the API terminal.
 
 ### 6. Start Frontend
 
@@ -105,7 +109,7 @@ npm install
 npm run dev
 ```
 
-Frontend available at: **http://localhost:5173**
+Frontend available at: **<http://localhost:5173>**
 
 ### 7. Index Existing Images
 
@@ -119,13 +123,13 @@ python tools/batch_indexer.py
 
 ### 8. Test It
 
-Open **http://localhost:5173**, upload an image, and search!
+Open **<http://localhost:5173>**, upload an image, and search.
 
 ---
 
 ## Architecture
 
-```
+```text
 MinIO (S3) ──webhook──▶ FastAPI ──▶ Redis Queue ──▶ Workers
                            │                          │
                            ▼                          ▼
@@ -135,13 +139,52 @@ MinIO (S3) ──webhook──▶ FastAPI ──▶ Redis Queue ──▶ Worker
                     React Frontend
 ```
 
-| Service | Port | Description |
-|---|---|---|
+| Service         | Port | Description                   |
+| --------------- | ---- | ----------------------------- |
 | FastAPI Backend | 8000 | Search API + webhook endpoint |
-| React Frontend | 5173 | Upload & search UI |
-| PostgreSQL | 5434 | Vector database (pgvector) |
-| Redis | 6379 | Background job queue |
-| MinIO | 9000 | S3-compatible object storage |
+| React Frontend  | 5173 | Upload & search UI (dev)      |
+| React Frontend  | 80   | Upload & search UI (Docker)   |
+| PostgreSQL      | 5434 | Vector database (pgvector)    |
+| Redis           | 6379 | Background job queue          |
+| MinIO API       | 9000 | S3-compatible object storage  |
+| MinIO Console   | 9001 | MinIO web UI                  |
+
+---
+
+## Docker Compose (Full Stack)
+
+All services build from a single root `Dockerfile` using multi-stage build targets.
+
+```bash
+docker-compose up -d
+```
+
+This starts: PostgreSQL, Redis, MinIO, Backend API, Workers (×4), Frontend (Nginx on port 80).
+
+| Build Target | Used By         | Description               |
+| ------------ | --------------- | ------------------------- |
+| `api`        | `app`, `worker` | Python FastAPI + Worker   |
+| `frontend`   | `frontend`      | React app served by Nginx |
+
+---
+
+## Key Files
+
+| File                             | Purpose                                     |
+| -------------------------------- | ------------------------------------------- |
+| `app.py`                         | FastAPI — search, health, webhook endpoints |
+| `Dockerfile`                     | Single multi-stage build (API + Frontend)   |
+| `nginx.conf`                     | Nginx config for SPA + API proxy            |
+| `docker-compose.yml`             | Full stack orchestration                    |
+| `core/embedding.py`              | CLIP model for generating image embeddings  |
+| `core/preprocessor.py`           | Image format conversion (PDF, AI → RGB)     |
+| `core/database.py`               | SQLAlchemy models + pgvector integration    |
+| `core/task_queue.py`             | Redis Queue job management                  |
+| `utils/minio_utils.py`           | S3 client helpers + bucket key cache        |
+| `utils/minio_config.py`          | Environment-driven MinIO config             |
+| `tools/batch_indexer.py`         | Bulk index existing images                  |
+| `tools/cleanup_stale_entries.py` | Remove orphaned DB entries                  |
+| `frontend/`                      | React + Vite search UI                      |
 
 ---
 
@@ -167,36 +210,3 @@ python tools/backfill_thumbnails.py
 # Check webhook status
 python tools/check_webhook_status.py
 ```
-
----
-
-## Docker Compose (Full Stack)
-
-To run everything in Docker (no local Python/Node needed):
-
-```bash
-docker-compose up -d
-```
-
-This starts: PostgreSQL, Redis, Backend API, Workers (×4), Frontend (Nginx)
-
----
-
-## Key Files
-
-| File | Purpose |
-|---|---|
-| `app.py` | FastAPI application — search, health, webhook endpoints |
-| `core/embedding.py` | CLIP model for generating image embeddings |
-| `core/preprocessor.py` | Image format conversion (PDF, AI → RGB) |
-| `core/database.py` | SQLAlchemy models + pgvector integration |
-| `core/task_queue.py` | Redis Queue job management |
-| `utils/minio_utils.py` | S3 client helpers + bucket key cache |
-| `utils/minio_config.py` | Environment-driven MinIO config |
-| `tools/batch_indexer.py` | Bulk index existing images |
-| `tools/cleanup_stale_entries.py` | Remove orphaned DB entries |
-| `frontend/` | React + Vite search UI |
-
----
-
-

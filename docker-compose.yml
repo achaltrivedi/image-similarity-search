@@ -1,106 +1,188 @@
 services:
+  # ---------------- REDIS ----------------
   redis:
     image: redis:7-alpine
-    container_name: ingest_queue
-    ports:
-      - "6379:6379"
-    restart: always
+    container_name: image-similarity-redis
+    command: redis-server --appendonly yes
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
     healthcheck:
-      test: [ "CMD", "redis-cli", "ping" ]
+      test: ['CMD', 'redis-cli', 'ping']
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - backend
+    mem_limit: 512m
+    cpus: 0.5
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
 
+  # ---------------- POSTGRES + PGVECTOR ----------------
   db:
     image: pgvector/pgvector:pg16
-    container_name: vector_db
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
-    ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+    container_name: image-similarity-postgres
+    restart: unless-stopped
+    env_file:
+      - .env
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
-    restart: always
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}" ]
+      test: ['CMD-SHELL', 'pg_isready -U $POSTGRES_USER -d $POSTGRES_DB']
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - backend
+    mem_limit: 2g
+    cpus: 1.5
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
 
+  # ---------------- MINIO ----------------
+  minio:
+    image: minio/minio
+    container_name: image-similarity-minio
+    command: server /data --console-address ":9001"
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - minio_data:/data
+    ports:
+      - '9000:9000'
+      - '9001:9001'
+    networks:
+      - backend
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:9000/minio/health/live']
+      interval: 20s
+      timeout: 10s
+      retries: 3
+    mem_limit: 1g
+    cpus: 1.0
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
+
+  # ---------------- WORKER ----------------
   worker:
-    build: .
+    build:
+      context: .
+      target: api
     image: image-similarity-worker
-    depends_on:
-      - redis
-      - db
+    restart: unless-stopped
     deploy:
       replicas: 4
-    environment:
-      # Override .env for Docker internal networking
-      REDIS_URL: redis://redis:6379/0
-      POSTGRES_HOST: db
-
-      # CONNECT TO HOST MINIO (User's existing server on 9001)
-      # host.docker.internal resolves to the Windows host machine
-      MINIO_ENDPOINT: "http://host.docker.internal:9000"
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
-      MINIO_BUCKET_NAME: ${MINIO_BUCKET_NAME}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_PORT: 5432
-      INGEST_QUEUE_BACKEND: ${INGEST_QUEUE_BACKEND}
-      HF_TOKEN: ${HF_TOKEN}
-    command: python tools/run_worker.py
-    restart: always
-
-  # --- API Backend ---
-  app:
-    build: .
-    image: image-similarity-api
-    container_name: vector_search
-    ports:
-      - "8000:8000"
     depends_on:
-      - db
-      - redis
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    env_file:
+      - .env
     environment:
       REDIS_URL: redis://redis:6379/0
       POSTGRES_HOST: db
-      MINIO_ENDPOINT: "http://host.docker.internal:9000"
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
-      MINIO_BUCKET_NAME: ${MINIO_BUCKET_NAME}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_PORT: 5432
-      INGEST_QUEUE_BACKEND: ${INGEST_QUEUE_BACKEND}
-      WEBHOOK_SECRET: ${WEBHOOK_SECRET}
-      HF_TOKEN: ${HF_TOKEN}
-    command: uvicorn app:app --host 0.0.0.0 --port 8000
-    restart: always
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_PUBLIC_ENDPOINT: http://localhost:9000
+    command: python tools/run_worker.py
+    networks:
+      - backend
+    mem_limit: 2g
+    cpus: 1.0
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
+
+  # ---------------- API ----------------
+  app:
+    build:
+      context: .
+      target: api
+    image: image-similarity-api
+    container_name: image-similarity-api
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_PUBLIC_ENDPOINT: http://localhost:9000
+    command: uvicorn app:app --host 0.0.0.0 --port 8000 --workers 2
+    expose:
+      - '8000'
+    networks:
+      - backend
+      - frontend
+    mem_limit: 2g
+    cpus: 1.0
     healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
+      test: ['CMD', 'curl', '-f', 'http://localhost:8000/health']
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 120s
+      start_period: 90s
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
 
-  # --- React Frontend ---
+  # ---------------- FRONTEND ----------------
   frontend:
-    build: ./frontend
+    build:
+      context: .
+      target: frontend
     image: image-similarity-frontend
-    container_name: vector_ui
-    ports:
-      - "5173:80" # Nginx listens on 80 inside, exposed as 5173 to match dev port (or 80 for prod)
+    container_name: image-similarity-frontend
+    restart: unless-stopped
     depends_on:
-      - app
-    restart: always
+      app:
+        condition: service_healthy
+    ports:
+      - '80:80'
+    networks:
+      - frontend
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
 
+# ---------------- NETWORKS ----------------
+networks:
+  backend:
+    driver: bridge
+  frontend:
+    driver: bridge
+
+# ---------------- VOLUMES ----------------
 volumes:
   postgres_data:
+  redis_data:
+  minio_data:
