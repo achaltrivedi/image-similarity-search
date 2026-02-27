@@ -11,21 +11,17 @@ if str(PROJECT_ROOT) not in sys.path:
 # Load .env from project root
 load_dotenv(PROJECT_ROOT / ".env")
 
-from utils.minio_utils import get_s3_client
+from utils.minio_utils import list_all_objects
 from utils.minio_config import BUCKET_NAME
 
 def list_all_files():
     print(f"🔍 Listing ALL objects in bucket: '{BUCKET_NAME}'")
-    s3 = get_s3_client()
     
     try:
-        paginator = s3.get_paginator("list_objects_v2")
         count = 0
-        for page in paginator.paginate(Bucket=BUCKET_NAME):
-            if "Contents" in page:
-                for obj in page["Contents"]:
-                    count += 1
-                    print(f" - {obj['Key']} (Size: {obj['Size']})")
+        for obj in list_all_objects():
+            count += 1
+            print(f" - {obj.object_name} (Size: {obj.size})")
         
         print(f"\n✅ Total objects found: {count}")
         

@@ -19,7 +19,7 @@ load_dotenv()
 from core.embedding import ImageEmbedder
 from core.color_texture_features import extract_color_features, extract_texture_features
 from core.design_features import extract_design_features
-from utils.minio_utils import get_s3_client, get_public_s3_client, get_bucket_keys
+from utils.minio_utils import get_bucket_keys, presigned_url, presigned_download_url
 from utils.minio_config import BUCKET_NAME
 from core.preprocessor import ImagePreprocessor
 from fastapi import Request
@@ -339,15 +339,6 @@ async def search_image(
         
         print(f"Search page {page}: {len(page_matches)} results (filtered {total_results} from DB)")
         
-        # Use public S3 client for presigned URLs (browser-accessible endpoint)
-        try:
-            s3 = get_public_s3_client()
-            s3_available = True
-        except Exception as e:
-            print(f"Warning: S3/MinIO unavailable, URLs will be empty: {e}")
-            s3 = None
-            s3_available = False
-        
         results = []
         for key, similarity, design_sim, color_sim, texture_sim, file_size in page_matches:
             image_url = None
@@ -359,40 +350,23 @@ async def search_image(
                 "texture": round(texture_sim, 3)
             }
             
-            if s3_available and s3:
+            try:
+                # 1. URL for original file (view)
+                image_url = presigned_url(key)
+                
+                # 2. URL for download
+                filename = key.split('/')[-1]
+                download_url = presigned_download_url(key, filename)
+                
+                # 3. URL for thumbnail (always use lightweight .thumbnails/ version)
+                thumb_key = f".thumbnails/{key}.png"
                 try:
-                    # 1. URL for original file (view)
-                    image_url = s3.generate_presigned_url(
-                        'get_object',
-                        Params={'Bucket': BUCKET_NAME, 'Key': key},
-                        ExpiresIn=3600
-                    )
-                    
-                    # 2. URL for download
-                    filename = key.split('/')[-1]
-                    download_url = s3.generate_presigned_url(
-                        'get_object',
-                        Params={
-                            'Bucket': BUCKET_NAME, 
-                            'Key': key,
-                            'ResponseContentDisposition': f'attachment; filename="{filename}"'
-                        },
-                        ExpiresIn=3600
-                    )
-                    
-                    # 3. URL for thumbnail
-                    if key.lower().endswith((".ai", ".pdf")):
-                        thumb_key = f".thumbnails/{key}.png"
-                        thumbnail_url = s3.generate_presigned_url(
-                            'get_object',
-                            Params={'Bucket': BUCKET_NAME, 'Key': thumb_key},
-                            ExpiresIn=3600
-                        )
-                    else:
-                        thumbnail_url = image_url
+                    thumbnail_url = presigned_url(thumb_key)
+                except Exception:
+                    thumbnail_url = image_url  # Fallback to full image
 
-                except Exception as e:
-                    print(f"Error generating presigned URL for {key}: {e}")
+            except Exception as e:
+                print(f"Error generating presigned URL for {key}: {e}")
 
             results.append({
                 "image_key": key,

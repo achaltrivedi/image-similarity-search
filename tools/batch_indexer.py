@@ -21,7 +21,7 @@ from core.embedding import ImageEmbedder
 from core.preprocessor import ImagePreprocessor
 from core.design_features import extract_design_features
 from core.color_texture_features import extract_color_features, extract_texture_features
-from utils.minio_utils import get_s3_client, SUPPORTED_IMAGE_EXTENSIONS
+from utils.minio_utils import SUPPORTED_IMAGE_EXTENSIONS, download_object, upload_object, list_all_objects
 from utils.minio_config import BUCKET_NAME
 
 # Configuration for large scale ingestion
@@ -115,7 +115,6 @@ def batch_index_images(force_reindex: bool = False):
     print("=" * 60)
 
     # 1. Initialize components
-    s3 = get_s3_client()
     embedder = ImageEmbedder()
     
     if not force_reindex:
@@ -127,10 +126,6 @@ def batch_index_images(force_reindex: bool = False):
     print(f"📦 Target Bucket: {BUCKET_NAME}")
     print(f"⚡ Batch Size: {BATCH_SIZE}")
 
-    # 2. Setup Pagination
-    paginator = s3.get_paginator('list_objects_v2')
-    page_iterator = paginator.paginate(Bucket=BUCKET_NAME)
-
     current_batch_keys: List[str] = []
     current_batch_images: List[Image.Image] = []
     current_batch_sizes: List[int] = []
@@ -140,76 +135,64 @@ def batch_index_images(force_reindex: bool = False):
     start_time = time.time()
 
     try:
-        for page in page_iterator:
-            if 'Contents' not in page:
+        for obj in list_all_objects():
+            key = obj.object_name
+            total_processed += 1
+
+            # Skip if already exists (unless forced)
+            if not force_reindex and key in existing_keys:
+                continue
+            
+            # Filter by extension
+            if not key.lower().endswith(SUPPORTED_IMAGE_EXTENSIONS):
+                continue
+            
+            # STOP RECURSION: Skip hidden thumbnail files
+            if key.startswith(".thumbnails/"):
                 continue
 
-            for obj in page['Contents']:
-                key = obj['Key']
-                total_processed += 1
+            print(f"[{total_processed}] Downloading: {key}...", end='\r')
+            
+            try:
+                # Download image bytes
+                file_bytes = download_object(key)
 
-                # Skip if already exists (unless forced)
-                if not force_reindex and key in existing_keys:
-                    continue
+                # Preprocess
+                image = ImagePreprocessor.process(file_bytes, key)
                 
-                # Filter by extension
-                if not key.lower().endswith(SUPPORTED_IMAGE_EXTENSIONS):
-                    continue
-                
-                # STOP RECURSION: Skip hidden thumbnail files
-                if key.startswith(".thumbnails/"):
-                    continue
+                # Add to batch buffers
+                current_batch_keys.append(key)
+                current_batch_images.append(image)
+                current_batch_sizes.append(len(file_bytes))
 
-                print(f"[{total_processed}] Downloading: {key}...", end='\r')
-                
+                # --- THUMBNAIL GENERATION ---
                 try:
-                    # Download image bytes
-                    response = s3.get_object(Bucket=BUCKET_NAME, Key=key)
-                    file_bytes = response['Body'].read()
-
-                    # Preprocess
-                    image = ImagePreprocessor.process(file_bytes, key)
-                    
-                    # Add to batch buffers
-                    current_batch_keys.append(key)
-                    current_batch_images.append(image)
-                    current_batch_sizes.append(len(file_bytes))
-
-                    # --- THUMBNAIL GENERATION ---
-                    try:
-                        # We upload thumbnails immediately (not batched) to keep batch logic simple
-                        # It adds network overhead but ensures thumbnails exist
-                        thumb_bytes = ImagePreprocessor.create_thumbnail(image)
-                        if thumb_bytes:
-                            thumb_key = f".thumbnails/{key}.png"
-                            s3.put_object(
-                                Bucket=BUCKET_NAME,
-                                Key=thumb_key,
-                                Body=thumb_bytes,
-                                ContentType="image/png"
-                            )
-                    except Exception as e:
-                        print(f"⚠️ Thumbnail fail for {key}: {e}")
-                    # ----------------------------
-
-                    # Process batch if full
-                    if len(current_batch_keys) >= BATCH_SIZE:
-                        print(f"\n⚡ Processing batch of {len(current_batch_keys)} items...")
-                        count = process_batch(embedder, current_batch_keys, current_batch_images, current_batch_sizes)
-                        total_new += count
-                        
-                        elapsed = time.time() - start_time
-                        if elapsed > 0:
-                            print(f"✅ Committed batch. Total Indexed: {total_new} | Avg Speed: {total_new/elapsed:.2f} imgs/s")
-                        
-                        # Reset buffers
-                        current_batch_keys = []
-                        current_batch_images = []
-                        current_batch_sizes = []
-
+                    thumb_bytes = ImagePreprocessor.create_thumbnail(image)
+                    if thumb_bytes:
+                        thumb_key = f".thumbnails/{key}.png"
+                        upload_object(thumb_key, thumb_bytes, content_type="image/png")
                 except Exception as e:
-                    print(f"\n⚠️ Error preparing {key}: {e}")
-                    continue
+                    print(f"⚠️ Thumbnail fail for {key}: {e}")
+                # ----------------------------
+
+                # Process batch if full
+                if len(current_batch_keys) >= BATCH_SIZE:
+                    print(f"\n⚡ Processing batch of {len(current_batch_keys)} items...")
+                    count = process_batch(embedder, current_batch_keys, current_batch_images, current_batch_sizes)
+                    total_new += count
+                    
+                    elapsed = time.time() - start_time
+                    if elapsed > 0:
+                        print(f"✅ Committed batch. Total Indexed: {total_new} | Avg Speed: {total_new/elapsed:.2f} imgs/s")
+                    
+                    # Reset buffers
+                    current_batch_keys = []
+                    current_batch_images = []
+                    current_batch_sizes = []
+
+            except Exception as e:
+                print(f"\n⚠️ Error preparing {key}: {e}")
+                continue
 
         # Final batch commit
         if current_batch_keys:

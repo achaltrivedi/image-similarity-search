@@ -8,7 +8,7 @@ from core.preprocessor import ImagePreprocessor
 from core.design_features import extract_design_features
 from core.color_texture_features import extract_color_features, extract_texture_features
 from utils.minio_config import BUCKET_NAME
-from utils.minio_utils import SUPPORTED_IMAGE_EXTENSIONS, get_s3_client
+from utils.minio_utils import SUPPORTED_IMAGE_EXTENSIONS, download_object, upload_object
 
 _embedder: ImageEmbedder | None = None
 
@@ -57,11 +57,8 @@ def process_minio_record(record: dict) -> dict:
     if object_key.startswith(".thumbnails/"):
         return {"status": "skipped", "reason": "is_thumbnail", "object_key": object_key}
 
-    s3 = get_s3_client()
-
     # 1. Download image
-    response = s3.get_object(Bucket=BUCKET_NAME, Key=object_key)
-    file_bytes = response['Body'].read()
+    file_bytes = download_object(object_key)
     file_size = len(file_bytes)
 
     # 2. Preprocess (converts to RGB Image)
@@ -73,12 +70,7 @@ def process_minio_record(record: dict) -> dict:
         thumb_bytes = ImagePreprocessor.create_thumbnail(image)
         if thumb_bytes:
             thumb_key = f".thumbnails/{object_key}.png"
-            s3.put_object(
-                Bucket=BUCKET_NAME,
-                Key=thumb_key,
-                Body=thumb_bytes,
-                ContentType="image/png"
-            )
+            upload_object(thumb_key, thumb_bytes, content_type="image/png")
             print(f"[worker] Uploaded thumbnail: {thumb_key}")
     except Exception as e:
         print(f"[worker] Failed to create thumbnail: {e}")
