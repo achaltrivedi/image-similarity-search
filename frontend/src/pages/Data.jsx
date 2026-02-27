@@ -8,6 +8,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { CheckCircle2, RefreshCw, Clock, AlertCircle } from 'lucide-react';
 
 const dummyData = [
   {
@@ -92,11 +93,28 @@ const dummyData = [
   },
 ];
 
-const statusVariants = {
-  Done: 'default',
-  Processing: 'secondary',
-  Hold: 'outline',
-  Error: 'destructive',
+const statusConfig = {
+  Done: {
+    class:
+      'bg-green-50 text-green-700 border-green-200 dark:bg-green-950/30 dark:text-green-300 dark:border-green-800',
+    icon: CheckCircle2,
+  },
+  Processing: {
+    class:
+      'bg-sky-50 text-sky-700 border-sky-200 dark:bg-sky-950/30 dark:text-sky-300 dark:border-sky-800',
+    icon: RefreshCw,
+    iconClass: 'animate-spin',
+  },
+  Hold: {
+    class:
+      'bg-purple-50 text-purple-700 border-purple-200 dark:bg-purple-950/30 dark:text-purple-300 dark:border-purple-800',
+    icon: Clock,
+  },
+  Error: {
+    class:
+      'bg-red-50 text-red-700 border-red-200 dark:bg-red-950/30 dark:text-red-300 dark:border-red-800',
+    icon: AlertCircle,
+  },
 };
 
 function Data() {
@@ -123,18 +141,29 @@ function Data() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {dummyData.map((item) => (
-              <TableRow key={item.id}>
-                <TableCell className="font-medium">{item.id}</TableCell>
-                <TableCell>{item.name}</TableCell>
-                <TableCell>{item.type}</TableCell>
-                <TableCell>{item.size}</TableCell>
-                <TableCell>
-                  <Badge variant={statusVariants[item.status]}>{item.status}</Badge>
-                </TableCell>
-                <TableCell className="text-right text-muted-foreground">{item.date}</TableCell>
-              </TableRow>
-            ))}
+            {dummyData.map((item) => {
+              const config = statusConfig[item.status];
+              const Icon = config.icon;
+
+              return (
+                <TableRow key={item.id}>
+                  <TableCell className="font-medium">{item.id}</TableCell>
+                  <TableCell>{item.name}</TableCell>
+                  <TableCell>{item.type}</TableCell>
+                  <TableCell>{item.size}</TableCell>
+                  <TableCell>
+                    <Badge className={`gap-1 ${config.class}`}>
+                      <Icon
+                        data-icon="inline-start"
+                        className={`w-3 h-3 ${config.iconClass || ''}`}
+                      />
+                      {item.status}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="text-right text-muted-foreground">{item.date}</TableCell>
+                </TableRow>
+              );
+            })}
           </TableBody>
         </Table>
       </div>
