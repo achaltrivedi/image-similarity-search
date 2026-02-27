@@ -354,7 +354,7 @@ async def search_image(
                 # 1. URL for original file (view)
                 image_url = presigned_url(key)
                 
-                # 2. URL for download
+                # 2. URL for download (always the original file)
                 filename = key.split('/')[-1]
                 download_url = presigned_download_url(key, filename)
                 
@@ -362,6 +362,11 @@ async def search_image(
                 thumb_key = f".thumbnails/{key}.png"
                 try:
                     thumbnail_url = presigned_url(thumb_key)
+                    
+                    # For AI/PDF files, use thumbnail as the "view" URL
+                    # since browsers can't render .ai files and may auto-download them
+                    if key.lower().endswith(('.ai', '.pdf')):
+                        image_url = thumbnail_url
                 except Exception:
                     thumbnail_url = image_url  # Fallback to full image
 
