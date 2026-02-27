@@ -49,3 +49,15 @@ export async function syncBucket() {
 
     return await response.json()
 }
+
+export async function fetchGallery(page = 1, pageSize = 50) {
+    const response = await fetch(
+        `${API_BASE_URL}/gallery?page=${page}&page_size=${pageSize}`
+    )
+
+    if (!response.ok) {
+        throw new Error(`Failed to load gallery: ${response.statusText}`)
+    }
+
+    return await response.json()
+}

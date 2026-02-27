@@ -442,6 +442,183 @@ async def minio_webhook(request: Request):
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 
+# ------------------------
+# GALLERY / DATA ENDPOINT
+# ------------------------
+
+def _format_file_size(size_bytes):
+    """Convert bytes to human-readable string."""
+    if not size_bytes or size_bytes == 0:
+        return "Unknown"
+    k = 1024
+    sizes = ["B", "KB", "MB", "GB"]
+    i = 0
+    size = float(size_bytes)
+    while size >= k and i < len(sizes) - 1:
+        size /= k
+        i += 1
+    return f"{size:.1f} {sizes[i]}"
+
+
+def _get_pending_keys() -> list[str]:
+    """Get object keys currently queued or being processed in RQ.
+    
+    Inspects both queued jobs and the currently executing job (started registry)
+    to build a list of keys that are 'in flight'.
+    """
+    try:
+        from rq import Queue
+        from rq.job import Job
+        
+        r = get_redis()
+        queue = Queue(QUEUE_NAME, connection=r)
+        
+        pending = []
+        
+        # 1. Jobs waiting in queue
+        for job in queue.jobs:
+            try:
+                record = job.args[0] if job.args else {}
+                key = record.get("s3", {}).get("object", {}).get("key")
+                if key:
+                    from urllib.parse import unquote_plus
+                    pending.append(unquote_plus(key))
+            except Exception:
+                pass
+        
+        # 2. Jobs currently being executed (started registry)
+        started = queue.started_job_registry
+        for job_id in started.get_job_ids():
+            try:
+                job = Job.fetch(job_id, connection=r)
+                record = job.args[0] if job.args else {}
+                key = record.get("s3", {}).get("object", {}).get("key")
+                if key:
+                    from urllib.parse import unquote_plus
+                    pending.append(unquote_plus(key))
+            except Exception:
+                pass
+        
+        return pending
+    except Exception as e:
+        print(f"Warning: Could not fetch pending keys: {e}")
+        return []
+
+
+QUEUE_NAME = os.getenv("INGEST_QUEUE_NAME", "minio_ingestion")
+
+@app.get("/gallery")
+def gallery(page: int = 1, page_size: int = 50):
+    """
+    Returns a paginated list of all indexed images from the database,
+    plus any pending items currently being processed by the worker.
+    """
+    if page < 1:
+        page = 1
+    if page_size < 1 or page_size > 200:
+        page_size = 50
+    
+    offset = (page - 1) * page_size
+    
+    db = SessionLocal()
+    try:
+        # Count total rows
+        total = db.query(ImageEmbedding.id).count()
+        
+        # Fetch only metadata columns — never return the huge vector arrays
+        rows = (
+            db.query(
+                ImageEmbedding.id,
+                ImageEmbedding.object_key,
+                ImageEmbedding.created_at,
+                ImageEmbedding.minio_metadata,
+            )
+            .order_by(ImageEmbedding.id.desc())
+            .offset(offset)
+            .limit(page_size)
+            .all()
+        )
+        
+        items = []
+        for row in rows:
+            key = row.object_key
+            filename = key.split("/")[-1] if "/" in key else key
+            ext = filename.rsplit(".", 1)[-1].upper() if "." in filename else "—"
+            
+            # Extract file size from minio_metadata JSON
+            metadata = row.minio_metadata or {}
+            size_bytes = metadata.get("file_size", 0)
+            
+            # Generate URLs
+            thumb_url = None
+            img_url = None
+            dl_url = None
+            try:
+                thumb_key = f".thumbnails/{key}.png"
+                thumb_url = presigned_url(thumb_key)
+                
+                # For AI/PDF, view URL = thumbnail; otherwise = original
+                if key.lower().endswith(('.ai', '.pdf')):
+                    img_url = thumb_url
+                else:
+                    img_url = presigned_url(key)
+                
+                dl_url = presigned_download_url(key, filename)
+            except Exception:
+                pass
+            
+            items.append({
+                "id": row.id,
+                "object_key": key,
+                "filename": filename,
+                "type": ext,
+                "size": _format_file_size(size_bytes),
+                "size_bytes": size_bytes,
+                "status": "Done",
+                "indexed_date": row.created_at.strftime("%Y-%m-%d %H:%M") if row.created_at else "—",
+                "thumbnail_url": thumb_url,
+                "image_url": img_url,
+                "download_url": dl_url,
+            })
+        
+        # Get pending items (in queue but not yet in DB)
+        pending_keys = _get_pending_keys()
+        indexed_keys = {item["object_key"] for item in items}
+        
+        pending_items = []
+        for pkey in pending_keys:
+            if pkey not in indexed_keys:
+                pfilename = pkey.split("/")[-1] if "/" in pkey else pkey
+                pext = pfilename.rsplit(".", 1)[-1].upper() if "." in pfilename else "—"
+                pending_items.append({
+                    "id": None,
+                    "object_key": pkey,
+                    "filename": pfilename,
+                    "type": pext,
+                    "size": "—",
+                    "size_bytes": 0,
+                    "status": "Processing",
+                    "indexed_date": "—",
+                    "thumbnail_url": None,
+                    "image_url": None,
+                    "download_url": None,
+                })
+        
+        return {
+            "items": items,
+            "pending": pending_items,
+            "page": page,
+            "page_size": page_size,
+            "total": total,
+            "has_more": (offset + len(items)) < total,
+        }
+    except Exception as e:
+        print(f"Gallery endpoint error: {e}")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+    finally:
+        db.close()
+
+
 @app.post("/sync_bucket")
 async def sync_bucket():
     """

@@ -1,143 +1,234 @@
+import { useState, useEffect, useCallback } from 'react';
+import { Loader2, Eye, Download, ChevronLeft, ChevronRight, Database } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import {
   Table,
   TableBody,
-  TableCaption,
   TableCell,
   TableHead,
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-
-const dummyData = [
-  {
-    id: 'IMG-001',
-    name: 'Modern Architecture',
-    size: '2.4 MB',
-    type: 'PNG',
-    date: '2024-02-28',
-    status: 'Done',
-  },
-  {
-    id: 'IMG-002',
-    name: 'Abstract Pattern',
-    size: '1.1 MB',
-    type: 'JPEG',
-    date: '2024-02-27',
-    status: 'Processing',
-  },
-  {
-    id: 'IMG-003',
-    name: 'Product Catalog v2',
-    size: '15.6 MB',
-    type: 'PDF',
-    date: '2024-02-26',
-    status: 'Done',
-  },
-  {
-    id: 'IMG-004',
-    name: 'Logo Concepts',
-    size: '4.2 MB',
-    type: 'AI',
-    date: '2024-02-25',
-    status: 'Hold',
-  },
-  {
-    id: 'IMG-005',
-    name: 'Main Banner',
-    size: '8.9 MB',
-    type: 'WebP',
-    date: '2024-02-24',
-    status: 'Done',
-  },
-  {
-    id: 'IMG-006',
-    name: 'Texture Pack 01',
-    size: '5.3 MB',
-    type: 'TIFF',
-    date: '2024-02-23',
-    status: 'Error',
-  },
-  {
-    id: 'IMG-007',
-    name: 'Background Gradient',
-    size: '0.8 MB',
-    type: 'PNG',
-    date: '2024-02-22',
-    status: 'Done',
-  },
-  {
-    id: 'IMG-008',
-    name: 'User Interface Mockup',
-    size: '12.1 MB',
-    type: 'PDF',
-    date: '2024-02-21',
-    status: 'Processing',
-  },
-  {
-    id: 'IMG-009',
-    name: 'App Icon set',
-    size: '2.2 MB',
-    type: 'PNG',
-    date: '2024-02-20',
-    status: 'Done',
-  },
-  {
-    id: 'IMG-010',
-    name: 'Social Media Post',
-    size: '3.5 MB',
-    type: 'JPEG',
-    date: '2024-02-19',
-    status: 'Done',
-  },
-];
+import { fetchGallery } from '@/api/searchService';
 
 const statusVariants = {
   Done: 'default',
   Processing: 'secondary',
-  Hold: 'outline',
   Error: 'destructive',
 };
 
+const PAGE_SIZE = 50;
+
 function Data() {
+  const [items, setItems] = useState([]);
+  const [pending, setPending] = useState([]);
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  const loadPage = useCallback(async (pageNum) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await fetchGallery(pageNum, PAGE_SIZE);
+      setItems(data.items || []);
+      setPending(data.pending || []);
+      setTotal(data.total || 0);
+      setHasMore(data.has_more || false);
+      setPage(pageNum);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  // Initial load
+  useEffect(() => {
+    loadPage(1);
+  }, [loadPage]);
+
+  // Auto-refresh pending items every 5 seconds
+  useEffect(() => {
+    if (pending.length === 0) return;
+    const interval = setInterval(() => loadPage(page), 5000);
+    return () => clearInterval(interval);
+  }, [pending.length, page, loadPage]);
+
+  const totalPages = Math.ceil(total / PAGE_SIZE);
+
+  // Merge pending (at top) + indexed items for display
+  const allRows = [...pending, ...items];
+
   return (
     <div className="container mx-auto px-4 py-16">
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold tracking-tight">Data Management</h1>
-        <p className="text-muted-foreground mt-2">
-          Review and manage the indexed assets in your system.
-        </p>
+      <div className="mb-8 flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">Data Management</h1>
+          <p className="text-muted-foreground mt-2">
+            Review and manage the indexed assets in your system.
+          </p>
+        </div>
+        <div className="flex items-center gap-3">
+          <Badge variant="outline" className="text-sm px-3 py-1">
+            <Database className="w-3.5 h-3.5 mr-1.5" />
+            {total} indexed
+          </Badge>
+          {pending.length > 0 && (
+            <Badge variant="secondary" className="text-sm px-3 py-1 animate-pulse">
+              <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+              {pending.length} processing
+            </Badge>
+          )}
+        </div>
       </div>
+
+      {error && (
+        <div className="mb-6 p-4 rounded-md bg-destructive/10 text-destructive text-sm">
+          {error}
+        </div>
+      )}
 
       <div className="rounded-md border bg-card">
         <Table>
-          <TableCaption>A list of recently indexed image assets.</TableCaption>
           <TableHeader>
             <TableRow>
-              <TableHead className="w-25">ID</TableHead>
+              <TableHead className="w-16">ID</TableHead>
+              <TableHead className="w-16">Preview</TableHead>
               <TableHead>Filename</TableHead>
-              <TableHead>Type</TableHead>
-              <TableHead>Size</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead className="text-right">Indexed Date</TableHead>
+              <TableHead className="w-20">Type</TableHead>
+              <TableHead className="w-24">Size</TableHead>
+              <TableHead className="w-28">Status</TableHead>
+              <TableHead className="w-40">Indexed Date</TableHead>
+              <TableHead className="text-right w-28">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {dummyData.map((item) => (
-              <TableRow key={item.id}>
-                <TableCell className="font-medium">{item.id}</TableCell>
-                <TableCell>{item.name}</TableCell>
-                <TableCell>{item.type}</TableCell>
-                <TableCell>{item.size}</TableCell>
-                <TableCell>
-                  <Badge variant={statusVariants[item.status]}>{item.status}</Badge>
+            {loading && allRows.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={8} className="text-center py-12">
+                  <Loader2 className="w-6 h-6 animate-spin mx-auto mb-2 text-muted-foreground" />
+                  <span className="text-muted-foreground">Loading...</span>
                 </TableCell>
-                <TableCell className="text-right text-muted-foreground">{item.date}</TableCell>
               </TableRow>
-            ))}
+            ) : allRows.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={8} className="text-center py-12 text-muted-foreground">
+                  No indexed assets found. Upload images to MinIO and run a sync.
+                </TableCell>
+              </TableRow>
+            ) : (
+              allRows.map((item, index) => (
+                <TableRow
+                  key={item.id ?? `pending-${index}`}
+                  className={item.status === 'Processing' ? 'bg-muted/30' : ''}
+                >
+                  <TableCell className="font-medium font-mono text-xs text-muted-foreground">
+                    {item.id ?? '—'}
+                  </TableCell>
+                  <TableCell>
+                    <div className="relative w-10 h-10 rounded overflow-hidden bg-muted flex items-center justify-center">
+                      {item.status === 'Processing' ? (
+                        <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+                      ) : item.thumbnail_url ? (
+                        <img
+                          src={item.thumbnail_url}
+                          alt={item.filename}
+                          className="w-full h-full object-cover"
+                          onError={(e) => {
+                            e.target.style.display = 'none';
+                          }}
+                        />
+                      ) : (
+                        <span className="text-[10px] text-muted-foreground">N/A</span>
+                      )}
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <span className="text-sm truncate block max-w-xs" title={item.object_key}>
+                      {item.filename}
+                    </span>
+                    {item.object_key !== item.filename && (
+                      <span className="text-xs text-muted-foreground truncate block max-w-xs" title={item.object_key}>
+                        {item.object_key}
+                      </span>
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant="outline" className="text-xs font-mono">
+                      {item.type}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="text-sm">{item.size}</TableCell>
+                  <TableCell>
+                    <Badge variant={statusVariants[item.status] || 'outline'}>
+                      {item.status === 'Processing' && (
+                        <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                      )}
+                      {item.status}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="text-sm text-muted-foreground">
+                    {item.indexed_date}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    {item.status === 'Done' && (
+                      <div className="flex items-center justify-end gap-1">
+                        {item.image_url && (
+                          <Button variant="ghost" size="icon" className="h-8 w-8" asChild>
+                            <a href={item.image_url} target="_blank" rel="noopener noreferrer" title="View">
+                              <Eye className="h-4 w-4" />
+                            </a>
+                          </Button>
+                        )}
+                        {item.download_url && (
+                          <Button variant="ghost" size="icon" className="h-8 w-8" asChild>
+                            <a href={item.download_url} title="Download">
+                              <Download className="h-4 w-4" />
+                            </a>
+                          </Button>
+                        )}
+                      </div>
+                    )}
+                  </TableCell>
+                </TableRow>
+              ))
+            )}
           </TableBody>
         </Table>
       </div>
+
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between mt-4">
+          <span className="text-sm text-muted-foreground">
+            Page {page} of {totalPages} ({total} total)
+          </span>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={page <= 1 || loading}
+              onClick={() => loadPage(page - 1)}
+            >
+              <ChevronLeft className="h-4 w-4 mr-1" />
+              Previous
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={!hasMore || loading}
+              onClick={() => loadPage(page + 1)}
+            >
+              Next
+              <ChevronRight className="h-4 w-4 ml-1" />
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
