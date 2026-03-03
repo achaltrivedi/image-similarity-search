@@ -1,6 +1,6 @@
 # app.py
 
-from fastapi import FastAPI, UploadFile, File, Form
+from fastapi import FastAPI, UploadFile, File, Form, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, HTMLResponse
 import os
@@ -12,6 +12,7 @@ import hashlib
 import redis
 from PIL import Image
 from dotenv import load_dotenv
+import asyncio
 
 # Load env vars from .env file (for local dev)
 load_dotenv()
@@ -58,6 +59,60 @@ app = FastAPI(
 # Allows the API to be called from other domains (e.g., a separate Frontend App)
 from fastapi.middleware.cors import CORSMiddleware
 ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:5174").split(",")
+
+# ------------------------
+# WEBSOCKET MANAGER
+# ------------------------
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: list[WebSocket] = []
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+
+    def disconnect(self, websocket: WebSocket):
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
+
+    async def broadcast(self, message: dict):
+        for connection in list(self.active_connections):
+            try:
+                await connection.send_json(message)
+            except Exception:
+                self.disconnect(connection)
+
+ws_manager = ConnectionManager()
+
+@app.on_event("startup")
+async def startup_event():
+    """Start background tasks on app startup."""
+    asyncio.create_task(redis_listener_loop())
+
+async def redis_listener_loop():
+    """Background loop that listens to Redis Pub/Sub for newly indexed images."""
+    r = get_redis()
+    pubsub = r.pubsub()
+    pubsub.subscribe("gallery_updates")
+    
+    # Run in executor to not block the main async loop with synchronous Redis calls
+    loop = asyncio.get_running_loop()
+    def get_message():
+        # Use a short timeout so it doesn't block indefinitely
+        return pubsub.get_message(ignore_subscribe_messages=True, timeout=0.5)
+        
+    while True:
+        try:
+            message = await loop.run_in_executor(None, get_message)
+            if message and message["type"] == "message":
+                data = json.loads(message["data"])
+                # Broadcast the newly indexed item to all connected WebSockets
+                await ws_manager.broadcast(data)
+        except Exception as e:
+            print(f"Redis PubSub listener error: {e}")
+            await asyncio.sleep(5) # Back off on error
+        await asyncio.sleep(0.1) # Small sleep to prevent high CPU
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
@@ -440,6 +495,21 @@ async def minio_webhook(request: Request):
     except Exception as e:
         print(f"Webhook error: {e}")
         return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.websocket("/ws/gallery")
+async def websocket_gallery(websocket: WebSocket):
+    """WebSocket endpoint for real-time gallery updates."""
+    await ws_manager.connect(websocket)
+    try:
+        while True:
+            # Keep connection alive, though we only push from the server side
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        ws_manager.disconnect(websocket)
+    except Exception as e:
+        print(f"WebSocket error: {e}")
+        ws_manager.disconnect(websocket)
 
 
 # ------------------------

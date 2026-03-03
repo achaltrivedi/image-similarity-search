@@ -65,6 +65,40 @@ def _listener_loop():
 
                     try:
                         enqueue_minio_record(record)
+                        
+                        # Publish "processing" event so the UI shows it immediately
+                        if event_name.startswith("s3:ObjectCreated:"):
+                            try:
+                                import json
+                                from redis import Redis
+                                from urllib.parse import unquote_plus
+                                
+                                REDIS_URL = os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0")
+                                r = Redis.from_url(REDIS_URL, decode_responses=True)
+                                
+                                decoded_key = unquote_plus(object_key)
+                                filename = decoded_key.split("/")[-1] if "/" in decoded_key else decoded_key
+                                ext = filename.rsplit(".", 1)[-1].upper() if "." in filename else "—"
+                                
+                                payload = {
+                                    "id": None,
+                                    "object_key": decoded_key,
+                                    "filename": filename,
+                                    "type": ext,
+                                    "size": "—",
+                                    "size_bytes": 0,
+                                    "status": "Processing",
+                                    "indexed_date": "—",
+                                    "thumbnail_url": None,
+                                    "image_url": None,
+                                    "download_url": None,
+                                    "event_type": "processing",
+                                }
+                                r.publish("gallery_updates", json.dumps(payload))
+                                print(f"📡 [listener] Published 'processing' event for {decoded_key}")
+                            except Exception as pub_e:
+                                print(f"⚠️ [listener] Failed to publish processing event: {pub_e}")
+                                
                     except Exception as e:
                         print(f"⚠️ [listener] Failed to enqueue {object_key}: {e}")
 

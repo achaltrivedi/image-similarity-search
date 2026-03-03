@@ -51,12 +51,63 @@ function Data() {
     loadPage(1);
   }, [loadPage]);
 
-  // Auto-refresh pending items every 5 seconds
+  // Connect to WebSocket for real-time updates
   useEffect(() => {
-    if (pending.length === 0) return;
-    const interval = setInterval(() => loadPage(page), 5000);
-    return () => clearInterval(interval);
-  }, [pending.length, page, loadPage]);
+    // Determine standard/secure protocol based on current page
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${window.location.host}/api/ws/gallery`;
+
+    const ws = new WebSocket(wsUrl);
+
+    ws.onmessage = (event) => {
+      try {
+        const payload = JSON.parse(event.data);
+
+        // Ignore thumbnail-related events
+        if (payload.object_key?.startsWith('.thumbnails/')) return;
+
+        if (payload.event_type === 'processing') {
+          // Phase 1: New upload detected — show "Processing" spinner immediately
+          setPending(prev => {
+            // Avoid duplicate entries
+            if (prev.some(p => p.object_key === payload.object_key)) return prev;
+            return [payload, ...prev];
+          });
+        }
+
+        if (payload.event_type === 'new_item') {
+          // Phase 2: Worker finished — flip from Processing → Done
+          // 1. Remove from pending
+          setPending(prev => prev.filter(p => p.object_key !== payload.object_key));
+
+          // 2. Prepend to items list only if we are on the first page
+          setItems(prev => {
+            // Avoid duplicates
+            if (prev.some(item => item.object_key === payload.object_key)) {
+              return prev;
+            }
+            if (page === 1) {
+              return [payload, ...prev].slice(0, PAGE_SIZE);
+            }
+            return prev;
+          });
+
+          // 3. Increment total count
+          setTotal(prev => prev + 1);
+        }
+      } catch (err) {
+        console.error("Failed to parse websocket message", err);
+      }
+    };
+
+    ws.onerror = (err) => {
+      console.error("WebSocket error:", err);
+    };
+
+    return () => {
+      ws.close();
+    };
+  }, [page]);
 
   const totalPages = Math.ceil(total / PAGE_SIZE);
 

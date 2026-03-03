@@ -108,6 +108,68 @@ def process_minio_record(record: dict) -> dict:
                 minio_metadata={"file_size": file_size}
             ))
         db.commit()
+        
+        # Publish real-time event
+        try:
+            import json
+            from redis import Redis
+            from core.task_queue import REDIS_URL
+            from utils.minio_utils import presigned_url, presigned_download_url
+            import datetime
+            
+            r = Redis.from_url(REDIS_URL, decode_responses=True)
+            
+            filename = object_key.split("/")[-1] if "/" in object_key else object_key
+            ext = filename.rsplit(".", 1)[-1].upper() if "." in filename else "—"
+            
+            # Format size
+            size_bytes = file_size
+            size_str = "Unknown"
+            if size_bytes:
+                k = 1024
+                sizes = ["B", "KB", "MB", "GB"]
+                i = 0
+                s = float(size_bytes)
+                while s >= k and i < len(sizes) - 1:
+                    s /= k
+                    i += 1
+                size_str = f"{s:.1f} {sizes[i]}"
+                
+            thumb_url = None
+            img_url = None
+            dl_url = None
+            try:
+                thumb_key = f".thumbnails/{object_key}.png"
+                thumb_url = presigned_url(thumb_key)
+                if object_key.lower().endswith(('.ai', '.pdf')):
+                    img_url = thumb_url
+                else:
+                    img_url = presigned_url(object_key)
+                dl_url = presigned_download_url(object_key, filename)
+            except Exception:
+                pass
+                
+            # Fetch the actual ID of the inserted/updated row
+            row_id = existing.id if existing else db.query(ImageEmbedding.id).filter_by(object_key=object_key).first()[0]
+            
+            payload = {
+                "id": row_id,
+                "object_key": object_key,
+                "filename": filename,
+                "type": ext,
+                "size": size_str,
+                "size_bytes": size_bytes,
+                "status": "Done",
+                "indexed_date": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "thumbnail_url": thumb_url,
+                "image_url": img_url,
+                "download_url": dl_url,
+                "event_type": "new_item"
+            }
+            r.publish("gallery_updates", json.dumps(payload))
+        except Exception as pub_e:
+            print(f"[worker] Failed to publish WebSocket event: {pub_e}")
+
         print(f"[worker] Indexed/upserted {object_key}")
         return {"status": "indexed", "object_key": object_key}
     except Exception as e:
