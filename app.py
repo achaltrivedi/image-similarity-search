@@ -689,6 +689,43 @@ def gallery(page: int = 1, page_size: int = 50):
         db.close()
 
 
+from pydantic import BaseModel
+
+class DeleteRequest(BaseModel):
+    object_keys: list[str]
+
+@app.delete("/gallery")
+def delete_gallery_items(req: DeleteRequest):
+    """
+    Deletes objects from MinIO by key. The existing event listener
+    pipeline will handle DB cleanup and WebSocket notifications.
+    """
+    if not req.object_keys:
+        return {"deleted": 0, "failed": 0, "errors": []}
+    
+    from utils.minio_utils import get_minio_client
+    client = get_minio_client()
+    
+    deleted = 0
+    failed = 0
+    errors = []
+    
+    for key in req.object_keys:
+        try:
+            client.remove_object(BUCKET_NAME, key)
+            # Also remove the thumbnail if it exists
+            try:
+                client.remove_object(BUCKET_NAME, f".thumbnails/{key}.png")
+            except Exception:
+                pass  # Thumbnail may not exist
+            deleted += 1
+        except Exception as e:
+            failed += 1
+            errors.append({"object_key": key, "error": str(e)})
+    
+    return {"deleted": deleted, "failed": failed, "errors": errors}
+
+
 @app.post("/sync_bucket")
 async def sync_bucket():
     """

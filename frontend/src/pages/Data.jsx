@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Loader2, Eye, Download, ChevronLeft, ChevronRight, Database } from 'lucide-react';
+import { Loader2, Eye, Download, ChevronLeft, ChevronRight, Database, Trash2, X } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -10,7 +10,8 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { fetchGallery } from '@/api/searchService';
+import { fetchGallery, deleteGalleryItems } from '@/api/searchService';
+import { toast } from 'sonner';
 
 const statusVariants = {
   Done: 'default',
@@ -29,6 +30,11 @@ function Data() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
+  // Multi-select state
+  const [selected, setSelected] = useState(new Set());
+  const [deleting, setDeleting] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
+
   const loadPage = useCallback(async (pageNum) => {
     setLoading(true);
     setError(null);
@@ -39,6 +45,7 @@ function Data() {
       setTotal(data.total || 0);
       setHasMore(data.has_more || false);
       setPage(pageNum);
+      setSelected(new Set()); // Clear selection on page change
     } catch (err) {
       setError(err.message);
     } finally {
@@ -53,7 +60,6 @@ function Data() {
 
   // Connect to WebSocket for real-time updates
   useEffect(() => {
-    // Determine standard/secure protocol based on current page
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${protocol}//${window.location.host}/api/ws/gallery`;
 
@@ -67,33 +73,31 @@ function Data() {
         if (payload.object_key?.startsWith('.thumbnails/')) return;
 
         if (payload.event_type === 'processing') {
-          // Phase 1: New upload detected — show "Processing" spinner immediately
           setPending(prev => {
-            // Avoid duplicate entries
             if (prev.some(p => p.object_key === payload.object_key)) return prev;
             return [payload, ...prev];
           });
         }
 
         if (payload.event_type === 'new_item') {
-          // Phase 2: Worker finished — flip from Processing → Done
-          // 1. Remove from pending
           setPending(prev => prev.filter(p => p.object_key !== payload.object_key));
-
-          // 2. Prepend to items list only if we are on the first page
           setItems(prev => {
-            // Avoid duplicates
-            if (prev.some(item => item.object_key === payload.object_key)) {
-              return prev;
-            }
-            if (page === 1) {
-              return [payload, ...prev].slice(0, PAGE_SIZE);
-            }
+            if (prev.some(item => item.object_key === payload.object_key)) return prev;
+            if (page === 1) return [payload, ...prev].slice(0, PAGE_SIZE);
             return prev;
           });
-
-          // 3. Increment total count
           setTotal(prev => prev + 1);
+        }
+
+        if (payload.event_type === 'deleted_item') {
+          setItems(prev => prev.filter(item => item.object_key !== payload.object_key));
+          setPending(prev => prev.filter(p => p.object_key !== payload.object_key));
+          setSelected(prev => {
+            const next = new Set(prev);
+            next.delete(payload.object_key);
+            return next;
+          });
+          setTotal(prev => Math.max(0, prev - 1));
         }
       } catch (err) {
         console.error("Failed to parse websocket message", err);
@@ -104,14 +108,50 @@ function Data() {
       console.error("WebSocket error:", err);
     };
 
-    return () => {
-      ws.close();
-    };
+    return () => ws.close();
   }, [page]);
 
-  const totalPages = Math.ceil(total / PAGE_SIZE);
+  // Selection helpers
+  const toggleSelect = (objectKey) => {
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(objectKey)) next.delete(objectKey);
+      else next.add(objectKey);
+      return next;
+    });
+  };
 
-  // Merge pending (at top) + indexed items for display
+  const selectableDoneItems = items.filter(i => i.status === 'Done');
+  const allSelected = selectableDoneItems.length > 0 && selectableDoneItems.every(i => selected.has(i.object_key));
+
+  const toggleSelectAll = () => {
+    if (allSelected) {
+      setSelected(new Set());
+    } else {
+      setSelected(new Set(selectableDoneItems.map(i => i.object_key)));
+    }
+  };
+
+  const handleDelete = async () => {
+    setShowConfirm(false);
+    setDeleting(true);
+    try {
+      const keys = Array.from(selected);
+      const result = await deleteGalleryItems(keys);
+      toast.success(`Deleted ${result.deleted} item${result.deleted !== 1 ? 's' : ''} from bucket`);
+      if (result.failed > 0) {
+        toast.error(`Failed to delete ${result.failed} item(s)`);
+      }
+      setSelected(new Set());
+      // The WebSocket deleted_item events will handle removing rows from UI
+    } catch (err) {
+      toast.error(`Deletion failed: ${err.message}`);
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const totalPages = Math.ceil(total / PAGE_SIZE);
   const allRows = [...pending, ...items];
 
   return (
@@ -137,6 +177,67 @@ function Data() {
         </div>
       </div>
 
+      {/* Selection Action Bar */}
+      {selected.size > 0 && (
+        <div className="mb-4 flex items-center justify-between rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3">
+          <div className="flex items-center gap-3">
+            <Badge variant="destructive" className="text-sm px-3 py-1">
+              {selected.size} selected
+            </Badge>
+            <span className="text-sm text-muted-foreground">
+              {selected.size === 1 ? '1 asset' : `${selected.size} assets`} selected for deletion
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setSelected(new Set())}
+            >
+              <X className="h-4 w-4 mr-1" />
+              Clear
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              disabled={deleting}
+              onClick={() => setShowConfirm(true)}
+            >
+              {deleting ? (
+                <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+              ) : (
+                <Trash2 className="h-4 w-4 mr-1" />
+              )}
+              Delete Selected
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Dialog (inline) */}
+      {showConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-lg border bg-card p-6 shadow-lg">
+            <h3 className="text-lg font-semibold mb-2">Confirm Deletion</h3>
+            <p className="text-sm text-muted-foreground mb-1">
+              You are about to permanently delete <strong>{selected.size}</strong> asset{selected.size !== 1 ? 's' : ''} from the MinIO bucket.
+            </p>
+            <p className="text-sm text-destructive mb-4">
+              This action cannot be undone. The files, thumbnails, and database records will be removed.
+            </p>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setShowConfirm(false)}>
+                Cancel
+              </Button>
+              <Button variant="destructive" onClick={handleDelete}>
+                <Trash2 className="h-4 w-4 mr-1" />
+                Delete {selected.size} asset{selected.size !== 1 ? 's' : ''}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {error && (
         <div className="mb-6 p-4 rounded-md bg-destructive/10 text-destructive text-sm">
           {error}
@@ -147,6 +248,15 @@ function Data() {
         <Table>
           <TableHeader>
             <TableRow>
+              <TableHead className="w-10">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 rounded border-border accent-primary cursor-pointer"
+                  checked={allSelected}
+                  onChange={toggleSelectAll}
+                  title="Select all"
+                />
+              </TableHead>
               <TableHead className="w-16">ID</TableHead>
               <TableHead className="w-16">Preview</TableHead>
               <TableHead>Filename</TableHead>
@@ -160,93 +270,109 @@ function Data() {
           <TableBody>
             {loading && allRows.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={8} className="text-center py-12">
+                <TableCell colSpan={9} className="text-center py-12">
                   <Loader2 className="w-6 h-6 animate-spin mx-auto mb-2 text-muted-foreground" />
                   <span className="text-muted-foreground">Loading...</span>
                 </TableCell>
               </TableRow>
             ) : allRows.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={8} className="text-center py-12 text-muted-foreground">
+                <TableCell colSpan={9} className="text-center py-12 text-muted-foreground">
                   No indexed assets found. Upload images to MinIO and run a sync.
                 </TableCell>
               </TableRow>
             ) : (
-              allRows.map((item, index) => (
-                <TableRow
-                  key={item.id ?? `pending-${index}`}
-                  className={item.status === 'Processing' ? 'bg-muted/30' : ''}
-                >
-                  <TableCell className="font-medium font-mono text-xs text-muted-foreground">
-                    {item.id ?? '—'}
-                  </TableCell>
-                  <TableCell>
-                    <div className="relative w-10 h-10 rounded overflow-hidden bg-muted flex items-center justify-center">
-                      {item.status === 'Processing' ? (
-                        <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
-                      ) : item.thumbnail_url ? (
-                        <img
-                          src={item.thumbnail_url}
-                          alt={item.filename}
-                          className="w-full h-full object-cover"
-                          onError={(e) => {
-                            e.target.style.display = 'none';
-                          }}
+              allRows.map((item, index) => {
+                const isSelected = selected.has(item.object_key);
+                const isSelectable = item.status === 'Done';
+                return (
+                  <TableRow
+                    key={item.id ?? `pending-${index}`}
+                    className={`${item.status === 'Processing' ? 'bg-muted/30' : ''} ${isSelected ? 'bg-destructive/5' : ''}`}
+                  >
+                    <TableCell>
+                      {isSelectable ? (
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4 rounded border-border accent-primary cursor-pointer"
+                          checked={isSelected}
+                          onChange={() => toggleSelect(item.object_key)}
                         />
                       ) : (
-                        <span className="text-[10px] text-muted-foreground">N/A</span>
+                        <span className="block w-4" />
                       )}
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <span className="text-sm truncate block max-w-xs" title={item.object_key}>
-                      {item.filename}
-                    </span>
-                    {item.object_key !== item.filename && (
-                      <span className="text-xs text-muted-foreground truncate block max-w-xs" title={item.object_key}>
-                        {item.object_key}
-                      </span>
-                    )}
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant="outline" className="text-xs font-mono">
-                      {item.type}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="text-sm">{item.size}</TableCell>
-                  <TableCell>
-                    <Badge variant={statusVariants[item.status] || 'outline'}>
-                      {item.status === 'Processing' && (
-                        <Loader2 className="w-3 h-3 mr-1 animate-spin" />
-                      )}
-                      {item.status}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">
-                    {item.indexed_date}
-                  </TableCell>
-                  <TableCell className="text-right">
-                    {item.status === 'Done' && (
-                      <div className="flex items-center justify-end gap-1">
-                        {item.image_url && (
-                          <Button variant="ghost" size="icon" className="h-8 w-8" asChild>
-                            <a href={item.image_url} target="_blank" rel="noopener noreferrer" title="View">
-                              <Eye className="h-4 w-4" />
-                            </a>
-                          </Button>
-                        )}
-                        {item.download_url && (
-                          <Button variant="ghost" size="icon" className="h-8 w-8" asChild>
-                            <a href={item.download_url} title="Download">
-                              <Download className="h-4 w-4" />
-                            </a>
-                          </Button>
+                    </TableCell>
+                    <TableCell className="font-medium font-mono text-xs text-muted-foreground">
+                      {item.id ?? '—'}
+                    </TableCell>
+                    <TableCell>
+                      <div className="relative w-10 h-10 rounded overflow-hidden bg-muted flex items-center justify-center">
+                        {item.status === 'Processing' ? (
+                          <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+                        ) : item.thumbnail_url ? (
+                          <img
+                            src={item.thumbnail_url}
+                            alt={item.filename}
+                            className="w-full h-full object-cover"
+                            onError={(e) => {
+                              e.target.style.display = 'none';
+                            }}
+                          />
+                        ) : (
+                          <span className="text-[10px] text-muted-foreground">N/A</span>
                         )}
                       </div>
-                    )}
-                  </TableCell>
-                </TableRow>
-              ))
+                    </TableCell>
+                    <TableCell>
+                      <span className="text-sm truncate block max-w-xs" title={item.object_key}>
+                        {item.filename}
+                      </span>
+                      {item.object_key !== item.filename && (
+                        <span className="text-xs text-muted-foreground truncate block max-w-xs" title={item.object_key}>
+                          {item.object_key}
+                        </span>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant="outline" className="text-xs font-mono">
+                        {item.type}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="text-sm">{item.size}</TableCell>
+                    <TableCell>
+                      <Badge variant={statusVariants[item.status] || 'outline'}>
+                        {item.status === 'Processing' && (
+                          <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                        )}
+                        {item.status}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="text-sm text-muted-foreground">
+                      {item.indexed_date}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {item.status === 'Done' && (
+                        <div className="flex items-center justify-end gap-1">
+                          {item.image_url && (
+                            <Button variant="ghost" size="icon" className="h-8 w-8" asChild>
+                              <a href={item.image_url} target="_blank" rel="noopener noreferrer" title="View">
+                                <Eye className="h-4 w-4" />
+                              </a>
+                            </Button>
+                          )}
+                          {item.download_url && (
+                            <Button variant="ghost" size="icon" className="h-8 w-8" asChild>
+                              <a href={item.download_url} title="Download">
+                                <Download className="h-4 w-4" />
+                              </a>
+                            </Button>
+                          )}
+                        </div>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                );
+              })
             )}
           </TableBody>
         </Table>

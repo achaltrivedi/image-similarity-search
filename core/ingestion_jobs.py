@@ -41,6 +41,20 @@ def process_minio_record(record: dict) -> dict:
         try:
             deleted_rows = db.query(ImageEmbedding).filter_by(object_key=object_key).delete()
             db.commit()
+            
+            # Publish real-time delete event for the UI
+            try:
+                import json
+                from redis import Redis
+                from core.task_queue import REDIS_URL
+                r = Redis.from_url(REDIS_URL, decode_responses=True)
+                r.publish("gallery_updates", json.dumps({
+                    "object_key": object_key,
+                    "event_type": "deleted_item",
+                }))
+            except Exception as pub_e:
+                print(f"[worker] Failed to publish delete event: {pub_e}")
+            
             print(f"[worker] Synchronized delete for {object_key}: removed={deleted_rows}")
             return {"status": "deleted", "object_key": object_key, "deleted_rows": deleted_rows}
         except Exception as e:

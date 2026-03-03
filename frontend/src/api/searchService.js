@@ -61,3 +61,17 @@ export async function fetchGallery(page = 1, pageSize = 50) {
 
     return await response.json()
 }
+
+export async function deleteGalleryItems(objectKeys) {
+    const response = await fetch(`${API_BASE_URL}/gallery`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ object_keys: objectKeys }),
+    })
+
+    if (!response.ok) {
+        throw new Error(`Delete failed: ${response.statusText}`)
+    }
+
+    return await response.json()
+}
