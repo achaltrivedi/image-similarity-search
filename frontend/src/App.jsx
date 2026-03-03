@@ -1,5 +1,5 @@
 // React
-import { Routes, Route, Link, NavLink } from 'react-router';
+import { useLocation, Link, NavLink } from 'react-router';
 
 // App components
 import { ModeToggle } from '@/components/ModeToggle';
@@ -9,6 +9,8 @@ import Home from '@/pages/Home';
 import Data from '@/pages/Data';
 
 function App() {
+  const location = useLocation();
+
   const navLinkClass = ({ isActive }) =>
     `transition-colors hover:text-foreground ${isActive ? 'text-primary font-semibold' : 'text-muted-foreground'}`;
 
@@ -42,12 +44,14 @@ function App() {
         </div>
       </header>
 
-      {/* Main Content Areas */}
+      {/* Main Content — both pages stay mounted, visibility toggled via CSS */}
       <main>
-        <Routes>
-          <Route path="/" element={<Home />} />
-          <Route path="/data" element={<Data />} />
-        </Routes>
+        <div style={{ display: location.pathname === '/' ? 'block' : 'none' }}>
+          <Home />
+        </div>
+        <div style={{ display: location.pathname === '/data' ? 'block' : 'none' }}>
+          <Data />
+        </div>
       </main>
     </div>
   );
