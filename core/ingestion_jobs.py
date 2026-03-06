@@ -92,7 +92,7 @@ def process_minio_record(record: dict) -> dict:
     # 4. Generate Embeddings (CLIP + Design)
     embedder = _get_embedder()
     embedding = embedder.embed_images([image])
-    embedding_list = embedding.cpu().numpy()[0].tolist()
+    embedding_list = embedding[0].tolist()
     
     try:
         design_vec = extract_design_features(image)

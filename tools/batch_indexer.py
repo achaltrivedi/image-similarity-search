@@ -47,7 +47,7 @@ def process_batch(embedder: ImageEmbedder, batch_keys: List[str], batch_images: 
         # Batch embedding (The big speedup)
         # embed_images expects a list of PIL Images
         embedding_tensor = embedder.embed_images(batch_images)
-        embeddings_list = embedding_tensor.cpu().numpy().tolist()
+        embeddings_list = embedding_tensor.tolist()
 
         # Create DB objects with all embeddings
         db_objects = []

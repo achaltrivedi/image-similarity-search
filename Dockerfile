@@ -5,7 +5,34 @@
 # ============================================================
 
 # ────────────────────────────────────────────────────────────
-# Stage 1: Python dependency builder
+# Stage 1: ONNX Model Exporter (uses PyTorch temporarily)
+# ────────────────────────────────────────────────────────────
+FROM python:3.11-slim AS onnx-exporter
+
+WORKDIR /export
+
+ENV PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    HF_HOME=/root/.cache/huggingface \
+    TRANSFORMERS_CACHE=/root/.cache/huggingface/hub
+
+# Install PyTorch (CPU) + export dependencies — only needed for conversion
+RUN pip install --extra-index-url https://download.pytorch.org/whl/cpu \
+    torch>=2.0.0 \
+    transformers>=4.36.0 \
+    onnxruntime>=1.17.0 \
+    safetensors>=0.4.0 \
+    Pillow>=10.0.0
+
+# Copy only what the export script needs
+COPY utils/config.py utils/config.py
+COPY tools/export_clip_onnx.py tools/export_clip_onnx.py
+
+# Run the export — produces models/clip-vit-base-patch32.onnx
+RUN python tools/export_clip_onnx.py
+
+# ────────────────────────────────────────────────────────────
+# Stage 2: Python dependency builder (lightweight, no PyTorch)
 # ────────────────────────────────────────────────────────────
 FROM python:3.11-slim AS python-builder
 
@@ -23,22 +50,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies (torch pulled from CPU-only index via requirements.txt)
+# Install Python dependencies (onnxruntime, NOT torch)
 COPY requirements.txt .
 RUN pip install --user -r requirements.txt
 
-# Pre-download CLIP model (~600MB, baked into image layer)
-# Prevents health-check timeouts and restart loops on first boot
+# Pre-download CLIPImageProcessor config (~small, just JSON + preprocessor_config)
 RUN python -c "\
-import sys; \
-print('Python:', sys.version); \
-print('sys.path:', sys.path); \
-from huggingface_hub import snapshot_download; \
-snapshot_download(repo_id='openai/clip-vit-base-patch32', repo_type='model', ignore_patterns=['*.msgpack', '*.h5', 'flax_model*', 'tf_model*', 'rust_model*']); \
-print('CLIP model pre-downloaded successfully')"
+    from transformers import CLIPImageProcessor; \
+    CLIPImageProcessor.from_pretrained('openai/clip-vit-base-patch32'); \
+    print('CLIPImageProcessor pre-downloaded successfully')"
 
 # ────────────────────────────────────────────────────────────
-# Stage 2: API / Worker runtime  ← target: api
+# Stage 3: API / Worker runtime  ← target: api
 # ────────────────────────────────────────────────────────────
 FROM python:3.11-slim AS api
 
@@ -49,9 +72,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy installed packages and model cache from builder
+# Copy installed packages and HF config cache from builder
 COPY --from=python-builder /root/.local /root/.local
 COPY --from=python-builder /root/.cache/huggingface /root/.cache/huggingface
+
+# Copy the exported ONNX model from the exporter stage
+COPY --from=onnx-exporter /export/models /app/models
 
 ENV HF_HOME=/root/.cache/huggingface \
     TRANSFORMERS_CACHE=/root/.cache/huggingface/hub
@@ -72,7 +98,7 @@ COPY db/ db/
 CMD ["python", "tools/run_worker.py"]
 
 # ────────────────────────────────────────────────────────────
-# Stage 3: Frontend Node build
+# Stage 4: Frontend Node build
 # ────────────────────────────────────────────────────────────
 FROM node:20-alpine AS frontend-build
 
@@ -87,7 +113,7 @@ COPY frontend/ .
 RUN npm run build
 
 # ────────────────────────────────────────────────────────────
-# Stage 4: Frontend Nginx runtime  ← target: frontend
+# Stage 5: Frontend Nginx runtime  ← target: frontend
 # ────────────────────────────────────────────────────────────
 FROM nginx:1.27-alpine AS frontend
 

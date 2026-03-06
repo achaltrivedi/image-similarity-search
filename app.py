@@ -275,7 +275,7 @@ async def search_image(
         # Generate embedding (with concurrency limit to prevent GPU OOM)
         with _embed_semaphore:
             query_embedding = embedder.embed_images([image])
-        query_np = query_embedding.cpu().numpy()[0]
+        query_np = query_embedding[0]
         query_vector = query_np.tolist()
         
         # Generate design feature vector for structural search
