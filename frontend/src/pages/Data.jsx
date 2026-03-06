@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Loader2, Eye, Download, ChevronLeft, ChevronRight, Database, Trash2, X } from 'lucide-react';
+import { Loader2, Eye, Download, ChevronLeft, ChevronRight, Database, Trash2, X, Search } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import {
   Table,
   TableBody,
@@ -30,30 +31,40 @@ function Data() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
+  // Search state
+  const [searchInput, setSearchInput] = useState('');
+  const [debouncedQuery, setDebouncedQuery] = useState('');
+
   // Multi-select state
   const [selected, setSelected] = useState(new Set());
   const [deleting, setDeleting] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
 
-  const loadPage = useCallback(async (pageNum) => {
+  // Debounce search input
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedQuery(searchInput), 400);
+    return () => clearTimeout(timer);
+  }, [searchInput]);
+
+  const loadPage = useCallback(async (pageNum, query = debouncedQuery) => {
     setLoading(true);
     setError(null);
     try {
-      const data = await fetchGallery(pageNum, PAGE_SIZE);
+      const data = await fetchGallery(pageNum, PAGE_SIZE, query);
       setItems(data.items || []);
       setPending(data.pending || []);
       setTotal(data.total || 0);
       setHasMore(data.has_more || false);
       setPage(pageNum);
-      setSelected(new Set()); // Clear selection on page change
+      setSelected(new Set()); // Clear selection on page change or new search
     } catch (err) {
       setError(err.message);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [debouncedQuery]);
 
-  // Initial load
+  // Load new data when debounced search changes or initial load
   useEffect(() => {
     loadPage(1);
   }, [loadPage]);
@@ -164,9 +175,19 @@ function Data() {
           </p>
         </div>
         <div className="flex items-center gap-3">
+          <div className="relative border-r border-border pr-3 mr-1">
+            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+            <Input
+              type="text"
+              placeholder="Search by path or filename (e.g. .ai)"
+              className="pl-9 w-[300px] h-9"
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+            />
+          </div>
           <Badge variant="outline" className="text-sm px-3 py-1">
             <Database className="w-3.5 h-3.5 mr-1.5" />
-            {total} indexed
+            {total} matching
           </Badge>
           {pending.length > 0 && (
             <Badge variant="secondary" className="text-sm px-3 py-1 animate-pulse">

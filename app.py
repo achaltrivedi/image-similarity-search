@@ -1,6 +1,6 @@
 # app.py
 
-from fastapi import FastAPI, UploadFile, File, Form, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, UploadFile, File, Form, WebSocket, WebSocketDisconnect, Query
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, HTMLResponse
 import os
@@ -578,24 +578,32 @@ def _get_pending_keys() -> list[str]:
 QUEUE_NAME = os.getenv("INGEST_QUEUE_NAME", "minio_ingestion")
 
 @app.get("/gallery")
-def gallery(page: int = 1, page_size: int = 50):
+def get_gallery(page: int = 1, page_size: int = 50, q: str = Query(None)):
     """
-    Returns a paginated list of all indexed images from the database,
-    plus any pending items currently being processed by the worker.
+    Returns a paginated list of all items currently in the database.
+    Also returns a list of actively processing items from Redis.
+    Supports optional text search via 'q' parameter.
     """
     if page < 1:
         page = 1
-    if page_size < 1 or page_size > 200:
-        page_size = 50
-    
+    if page_size > 100:
+        page_size = 100
+        
     offset = (page - 1) * page_size
     
     db = SessionLocal()
     try:
-        # Count total rows
-        total = db.query(ImageEmbedding.id).count()
+        # Build base query
+        base_query = db.query(ImageEmbedding)
         
-        # Fetch only metadata columns — never return the huge vector arrays
+        # Apply search filter if provided
+        if q:
+            base_query = base_query.filter(ImageEmbedding.object_key.ilike(f"%{q}%"))
+            
+        # Count total rows matching filter
+        total = base_query.count()
+        
+        # Fetch only metadata columns (never return huge vector arrays)
         rows = (
             db.query(
                 ImageEmbedding.id,
@@ -603,6 +611,7 @@ def gallery(page: int = 1, page_size: int = 50):
                 ImageEmbedding.created_at,
                 ImageEmbedding.minio_metadata,
             )
+            .filter(ImageEmbedding.object_key.ilike(f"%{q}%") if q else True)
             .order_by(ImageEmbedding.id.desc())
             .offset(offset)
             .limit(page_size)

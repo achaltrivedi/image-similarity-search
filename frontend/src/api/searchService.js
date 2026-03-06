@@ -50,10 +50,11 @@ export async function syncBucket() {
     return await response.json()
 }
 
-export async function fetchGallery(page = 1, pageSize = 50) {
-    const response = await fetch(
-        `${API_BASE_URL}/gallery?page=${page}&page_size=${pageSize}`
-    )
+export const fetchGallery = async (page = 1, pageSize = 50, q = '') => {
+    const params = new URLSearchParams({ page, page_size: pageSize });
+    if (q) params.append('q', q);
+
+    const response = await fetch(`${API_BASE_URL}/gallery?${params.toString()}`);
 
     if (!response.ok) {
         throw new Error(`Failed to load gallery: ${response.statusText}`)
