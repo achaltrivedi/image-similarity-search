@@ -450,53 +450,6 @@ async def search_image(
     }
 
 
-# ------------------------
-# WEBHOOK ENDPOINT
-# ------------------------
-@app.post("/webhook/minio")
-async def minio_webhook(request: Request):
-    """
-    Receives S3/MinIO bucket notification events.
-    Enqueues ingestion tasks to background workers.
-    """
-    try:
-        payload = await request.json()
-        print(f"Received webhook payload: {payload}")
-        
-        if "Records" not in payload:
-            return JSONResponse(status_code=400, content={"error": "Invalid payload"})
-
-        accepted = 0
-        queued = 0
-        failed = 0
-        job_ids: list[str] = []
-
-        for record in payload["Records"]:
-            try:
-                enqueue_result = enqueue_minio_record(record)
-                accepted += 1
-                if enqueue_result.get("queued"):
-                    queued += 1
-                    job_id = enqueue_result.get("job_id")
-                    if job_id:
-                        job_ids.append(job_id)
-            except Exception as e:
-                failed += 1
-                print(f"Failed to enqueue webhook record: {e}")
-
-        return {
-            "status": "accepted",
-            "accepted": accepted,
-            "queued": queued,
-            "failed": failed,
-            "job_ids": job_ids,
-        }
-        
-    except Exception as e:
-        print(f"Webhook error: {e}")
-        return JSONResponse(status_code=500, content={"error": str(e)})
-
-
 @app.websocket("/ws/gallery")
 async def websocket_gallery(websocket: WebSocket):
     """WebSocket endpoint for real-time gallery updates."""
@@ -750,7 +703,7 @@ async def sync_bucket():
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 
-@app.get("/", response_class=None)
+@app.get("/", response_class=HTMLResponse)
 def home():
         """Minimal web UI for quick manual testing."""
         html = """
