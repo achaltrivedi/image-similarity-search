@@ -139,14 +139,14 @@ Open **<http://localhost:5173>**, upload an image, and search.
                          │        run_worker.py (single process)   │
 MinIO (S3)               │                                         │
    │                     │  Thread 1: RQ Worker                    │
-   │  listen_bucket_     │  ─────────────────                      │
+   │  listen_bucket_     │  ───────────────────                    │
    ├──notification()────▶│  Picks jobs from Redis, processes them  │
    │  (minio-py SDK)     │  (embed, thumbnail, store in Postgres)  │
    │                     │                                         │
-   │                     │  Thread 2: MinIO Event Listener          │
-   │                     │  ───────────────────────────────         │
-   │                     │  Streams upload/delete events            │
-   │                     │  Enqueues into Redis via task_queue.py   │
+   │                     │  Thread 2: MinIO Event Listener         │
+   │                     │  ───────────────────────────────        │
+   │                     │  Streams upload/delete events           │
+   │                     │  Enqueues into Redis via task_queue.py  │
                          └─────────────────────────────────────────┘
                                           │
                ┌──────────────────────────┼──────────────────────┐
@@ -155,7 +155,7 @@ MinIO (S3)               │                                         │
                │               Embeddings (256/64d)              │
                └──────────┬───────────────┘                      │
                           ▼                                      │
-                    PostgreSQL (pgvector)                         │
+                    PostgreSQL (pgvector)                        │
                           │                                      │
                ┌──────────┴───────────┐                          │
                ▼                      ▼                          ▼
@@ -181,12 +181,12 @@ MinIO (S3)               │                                         │
 
 Each image is represented by **4 vector embeddings**, all computed at ingestion time:
 
-| Embedding        | Dimensions | Model / Method              | Purpose            |
-| ---------------- | ---------- | --------------------------- | ------------------ |
-| `embedding`      | 768        | CLIP ViT-B/32               | Semantic similarity|
-| `design_embedding` | 256      | Edge density grid (Canny)   | Structural layout  |
-| `color_embedding`  | 256      | HSV histogram (mean-centered) | Color palette    |
-| `texture_embedding` | 64     | Grayscale histogram (mean-centered) | Surface texture |
+| Embedding           | Dimensions | Model / Method                      | Purpose             |
+| ------------------- | ---------- | ----------------------------------- | ------------------- |
+| `embedding`         | 768        | CLIP ViT-B/32                       | Semantic similarity |
+| `design_embedding`  | 256        | Edge density grid (Canny)           | Structural layout   |
+| `color_embedding`   | 256        | HSV histogram (mean-centered)       | Color palette       |
+| `texture_embedding` | 64         | Grayscale histogram (mean-centered) | Surface texture     |
 
 All vectors are L2-normalized and mean-centered (where applicable) so that PostgreSQL's native `cosine_distance()` equals the Pearson Correlation Coefficient.
 
@@ -226,27 +226,27 @@ This starts: PostgreSQL, Redis, MinIO, Backend API, Workers (×4), Frontend (Ngi
 
 ## Key Files
 
-| File                             | Purpose                                          |
-| -------------------------------- | ------------------------------------------------ |
-| `app.py`                         | FastAPI — search, health, webhook, sync endpoints |
-| `Dockerfile`                     | Multi-stage build (API + Frontend, CPU-only)      |
-| `docker-compose.yml`             | Full stack orchestration with health checks       |
-| `nginx.conf`                     | Nginx config for SPA + API proxy                  |
-| `core/embedding.py`              | CLIP model for semantic image embeddings          |
-| `core/color_texture_features.py` | HSV color + grayscale texture feature extractors  |
-| `core/design_features.py`        | Edge density grid for structural embeddings       |
-| `core/preprocessor.py`           | Image format conversion (PDF, AI → RGB)           |
-| `core/database.py`               | SQLAlchemy models + pgvector (4 vector columns)   |
-| `core/minio_listener.py`         | Real-time MinIO event listener (minio-py SDK)     |
-| `core/task_queue.py`             | Redis Queue job management + sync locking         |
-| `core/ingestion_jobs.py`         | Full ingestion pipeline (download → embed → store)|
-| `utils/minio_utils.py`           | S3 client helpers + bucket key cache              |
-| `utils/minio_config.py`          | Environment-driven MinIO config                   |
-| `tools/run_worker.py`            | RQ worker + event listener launcher               |
-| `tools/batch_indexer.py`         | Bulk index existing images (4 vectors per image)  |
-| `tools/init_db.py`               | Database schema setup (tables, columns, indexes)  |
-| `tools/cleanup_stale_entries.py` | Remove orphaned DB entries                        |
-| `frontend/`                      | React + Vite search UI (dark mode, shadcn/ui)     |
+| File                             | Purpose                                            |
+| -------------------------------- | -------------------------------------------------- |
+| `app.py`                         | FastAPI — search, health, webhook, sync endpoints  |
+| `Dockerfile`                     | Multi-stage build (API + Frontend, CPU-only)       |
+| `docker-compose.yml`             | Full stack orchestration with health checks        |
+| `nginx.conf`                     | Nginx config for SPA + API proxy                   |
+| `core/embedding.py`              | CLIP model for semantic image embeddings           |
+| `core/color_texture_features.py` | HSV color + grayscale texture feature extractors   |
+| `core/design_features.py`        | Edge density grid for structural embeddings        |
+| `core/preprocessor.py`           | Image format conversion (PDF, AI → RGB)            |
+| `core/database.py`               | SQLAlchemy models + pgvector (4 vector columns)    |
+| `core/minio_listener.py`         | Real-time MinIO event listener (minio-py SDK)      |
+| `core/task_queue.py`             | Redis Queue job management + sync locking          |
+| `core/ingestion_jobs.py`         | Full ingestion pipeline (download → embed → store) |
+| `utils/minio_utils.py`           | S3 client helpers + bucket key cache               |
+| `utils/minio_config.py`          | Environment-driven MinIO config                    |
+| `tools/run_worker.py`            | RQ worker + event listener launcher                |
+| `tools/batch_indexer.py`         | Bulk index existing images (4 vectors per image)   |
+| `tools/init_db.py`               | Database schema setup (tables, columns, indexes)   |
+| `tools/cleanup_stale_entries.py` | Remove orphaned DB entries                         |
+| `frontend/`                      | React + Vite search UI (dark mode, shadcn/ui)      |
 
 ---
 
