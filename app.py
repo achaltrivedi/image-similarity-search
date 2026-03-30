@@ -58,6 +58,12 @@ app = FastAPI(
 # Enable CORS (Cross-Origin Resource Sharing)
 # Allows the API to be called from other domains (e.g., a separate Frontend App)
 from fastapi.middleware.cors import CORSMiddleware
+
+@app.get("/health")
+def health_check():
+    """Simple health check endpoint for Docker container status."""
+    return {"status": "ok"}
+
 ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:5174").split(",")
 
 # ------------------------

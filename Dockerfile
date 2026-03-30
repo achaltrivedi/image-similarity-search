@@ -11,6 +11,9 @@ FROM python:3.11-slim AS onnx-exporter
 
 WORKDIR /export
 
+ARG HF_TOKEN
+ENV HF_TOKEN=${HF_TOKEN}
+
 ENV PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     HF_HOME=/root/.cache/huggingface \
@@ -20,6 +23,7 @@ ENV PIP_NO_CACHE_DIR=1 \
 RUN pip install --extra-index-url https://download.pytorch.org/whl/cpu \
     torch>=2.0.0 \
     transformers>=4.36.0 \
+    onnx>=1.15.0 \
     onnxruntime>=1.17.0 \
     safetensors>=0.4.0 \
     Pillow>=10.0.0
@@ -38,6 +42,9 @@ FROM python:3.11-slim AS python-builder
 
 WORKDIR /build
 
+ARG HF_TOKEN
+ENV HF_TOKEN=${HF_TOKEN}
+
 ENV PATH=/root/.local/bin:$PATH \
     PYTHONPATH=/root/.local/lib/python3.11/site-packages \
     PIP_NO_CACHE_DIR=1 \
@@ -54,12 +61,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --user -r requirements.txt
 
-# Pre-download CLIPImageProcessor config (~small, just JSON + preprocessor_config)
-RUN python -c "\
-    from transformers import CLIPImageProcessor; \
-    CLIPImageProcessor.from_pretrained('openai/clip-vit-base-patch32'); \
-    print('CLIPImageProcessor pre-downloaded successfully')"
-
 # ────────────────────────────────────────────────────────────
 # Stage 3: API / Worker runtime  ← target: api
 # ────────────────────────────────────────────────────────────
@@ -72,9 +73,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy installed packages and HF config cache from builder
+# Copy installed packages from builder
 COPY --from=python-builder /root/.local /root/.local
-COPY --from=python-builder /root/.cache/huggingface /root/.cache/huggingface
 
 # Copy the exported ONNX model from the exporter stage
 COPY --from=onnx-exporter /export/models /app/models
