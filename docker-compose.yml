@@ -12,8 +12,6 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-    ports:
-      - '6379:6379'
     networks:
       - backend
     mem_limit: 512m
@@ -39,8 +37,6 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-    ports:
-      - '${POSTGRES_PORT:-5432}:5432'
     networks:
       - backend
     mem_limit: 2g
@@ -51,16 +47,22 @@ services:
         max-size: '10m'
         max-file: '3'
 
-  # ---------------- MINIO ----------------
+  # ---------------- MINIO AIStor ----------------
   minio:
-    image: minio/minio
+    image: quay.io/minio/aistor/minio:latest
     container_name: image-similarity-minio
-    command: server /data --console-address ":9001"
+    command: server /data --console-address ":9001" --license /minio.license
     restart: unless-stopped
-    env_file:
-      - .env
+    # Only pass root login credentials to the MinIO container.
+    # MINIO_ACCESS_KEY / MINIO_SECRET_KEY are service-account keys used by
+    # the application and must NOT be injected here (they would shadow the
+    # root credentials in legacy MinIO builds).
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
     volumes:
       - minio_data:/data
+      - ./minio.license:/minio.license:ro
     ports:
       - '9000:9000'
       - '9001:9001'
@@ -79,7 +81,7 @@ services:
         max-size: '10m'
         max-file: '3'
 
-  # ---------------- WORKER ----------------
+  # ---------------- WORKER POOL ----------------
   worker:
     build:
       context: .
@@ -105,13 +107,43 @@ services:
       POSTGRES_PORT: 5432
       MINIO_ENDPOINT: http://minio:9000
       MINIO_PUBLIC_ENDPOINT: http://localhost:9000
-      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
-      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      ENABLE_MINIO_LISTENER: 'false' # Workers only process jobs, don't listen
     command: python tools/run_worker.py
     networks:
       - backend
     mem_limit: 2g
     cpus: 1.0
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
+
+  # ---------------- EVENT LISTENER ----------------
+  listener:
+    build:
+      context: .
+      target: api
+      args:
+        HF_TOKEN: ${HF_TOKEN}
+    image: image-similarity-worker
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      MINIO_ENDPOINT: http://minio:9000
+      ENABLE_MINIO_LISTENER: 'true' # Dedicated process for real-time sync
+    command: python tools/run_worker.py
+    networks:
+      - backend
+    mem_limit: 512m
+    cpus: 0.5
     logging:
       driver: json-file
       options:
@@ -143,8 +175,6 @@ services:
       POSTGRES_PORT: 5432
       MINIO_ENDPOINT: http://minio:9000
       MINIO_PUBLIC_ENDPOINT: http://localhost:9000
-      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
-      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
     # Single worker required: WebSocket PubSub listener uses asyncio startup task
     command: uvicorn app:app --host 0.0.0.0 --port 8000 --workers 1
     expose:
@@ -158,8 +188,8 @@ services:
       test: [ 'CMD', 'curl', '-f', 'http://localhost:8000/health' ]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 90s
+      retries: 5
+      start_period: 180s
     logging:
       driver: json-file
       options:
@@ -176,7 +206,7 @@ services:
     restart: unless-stopped
     depends_on:
       app:
-        condition: service_healthy
+        condition: service_started
     ports:
       - '80:80'
     networks:
