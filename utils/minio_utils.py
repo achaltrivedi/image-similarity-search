@@ -63,7 +63,14 @@ def get_minio_client() -> Minio:
 
 
 def get_public_minio_client() -> Minio:
-    """MinIO client using public endpoint (for generating browser-accessible presigned URLs)."""
+    """MinIO client using the public endpoint for presigned URL generation.
+
+    Points to MINIO_PUBLIC_ENDPOINT (e.g. localhost:9000) so that the Host
+    header baked into the AWS-v4 signature matches what the browser sends.
+    The ``region`` is hard-coded to avoid the automatic region-discovery HTTP
+    call that would fail from inside a Docker container (localhost is not
+    reachable).
+    """
     global _minio_public_client
     if _minio_public_client is None:
         endpoint, secure = _parse_endpoint(MINIO_PUBLIC_ENDPOINT)
@@ -72,6 +79,7 @@ def get_public_minio_client() -> Minio:
             access_key=MINIO_ACCESS_KEY,
             secret_key=MINIO_SECRET_KEY,
             secure=secure,
+            region="us-east-1",  # skip auto-discovery HTTP call
         )
     return _minio_public_client
 
@@ -224,13 +232,10 @@ def object_exists(key: str) -> bool:
 
 
 def presigned_url(key: str, expires: int = 3600, response_headers: dict | None = None) -> str:
-    """Generate a presigned GET URL using the public endpoint."""
+    """Generate a browser-accessible presigned GET URL."""
     client = get_public_minio_client()
     extra = {}
     if response_headers:
-        from minio.helpers import ObjectWriteResult
-        from urllib.parse import urlencode
-        # minio-py supports response headers via extra_query_params
         extra["extra_query_params"] = response_headers
     return client.presigned_get_object(
         BUCKET_NAME,
