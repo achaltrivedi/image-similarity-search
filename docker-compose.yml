@@ -37,6 +37,8 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    ports:
+      - '5433:5432'
     networks:
       - backend
     mem_limit: 2g
