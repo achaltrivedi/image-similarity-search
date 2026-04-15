@@ -80,6 +80,24 @@ export default function ResultCard({ result, rank }) {
           }}
         />
 
+        {/* Sub-Part Bounding Box Overlay */}
+        {result.bounding_box && result.bounding_box.length > 0 && (
+          <svg 
+            className="absolute inset-0 w-full h-full pointer-events-none" 
+            viewBox="0 0 100 100" 
+            preserveAspectRatio="none" 
+            style={{ zIndex: 10 }}
+          >
+            <polygon 
+              points={result.bounding_box.map(pt => `${pt.x * 100},${pt.y * 100}`).join(' ')} 
+              fill="rgba(239, 68, 68, 0.25)" 
+              stroke="rgb(239, 68, 68)" 
+              strokeWidth="2" 
+              vectorEffect="non-scaling-stroke" 
+            />
+          </svg>
+        )}
+
         {/* Rank Badge */}
         <Badge
           variant='secondary'
