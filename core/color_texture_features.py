@@ -30,8 +30,8 @@ def extract_color_features(pil_image: Image.Image) -> list[float]:
             feature_vector.extend(hist.tolist())
 
     arr = np.array(feature_vector, dtype=np.float32)
-    # Mean centering + L2 normalize transforms Cosine Similarity mathematically into Pearson Correlation
-    arr = arr - np.mean(arr)
+    # L2 normalize so cosine similarity measures directional match (color layout)
+    # Do NOT mean-center: subtracting the mean collapses all color spatial vectors toward the same centroid
     norm = np.linalg.norm(arr)
     if norm > 0:
         arr = arr / norm
@@ -62,8 +62,8 @@ def extract_texture_features(pil_image: Image.Image) -> list[float]:
             feature_vector.append(variance)
 
     arr = np.array(feature_vector, dtype=np.float32)
-    # Mean centering + L2 normalize into Pearson Correlation equivalent
-    arr = arr - np.mean(arr)
+    # L2 normalize to unit vector for cosine similarity
+    # Do NOT mean-center: texture variance values must retain their relative magnitudes
     norm = np.linalg.norm(arr)
     if norm > 0:
         arr = arr / norm
