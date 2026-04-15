@@ -69,58 +69,88 @@ function Data() {
     loadPage(1);
   }, [loadPage]);
 
-  // Connect to WebSocket for real-time updates
+  // Connect to WebSocket for real-time updates with auto-reconnect
   useEffect(() => {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/api/ws/gallery`;
+    let ws = null;
+    let retryDelay = 1000; // start at 1s, cap at 8s
+    let retryTimeout = null;
+    let isMounted = true;
 
-    const ws = new WebSocket(wsUrl);
+    const connect = () => {
+      if (!isMounted) return;
 
-    ws.onmessage = (event) => {
-      try {
-        const payload = JSON.parse(event.data);
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${protocol}//${window.location.host}/api/ws/gallery`;
+      ws = new WebSocket(wsUrl);
 
-        // Ignore thumbnail-related events
-        if (payload.object_key?.startsWith('.thumbnails/')) return;
+      ws.onopen = () => {
+        // Reset backoff on successful connection
+        retryDelay = 1000;
+        // Reload to catch any events missed while disconnected
+        loadPage(1);
+      };
 
-        if (payload.event_type === 'processing') {
-          setPending(prev => {
-            if (prev.some(p => p.object_key === payload.object_key)) return prev;
-            return [payload, ...prev];
-          });
+      ws.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data);
+
+          // Ignore thumbnail-related events
+          if (payload.object_key?.startsWith('.thumbnails/')) return;
+
+          if (payload.event_type === 'processing') {
+            setPending(prev => {
+              if (prev.some(p => p.object_key === payload.object_key)) return prev;
+              return [payload, ...prev];
+            });
+          }
+
+          if (payload.event_type === 'new_item') {
+            setPending(prev => prev.filter(p => p.object_key !== payload.object_key));
+            setItems(prev => {
+              if (prev.some(item => item.object_key === payload.object_key)) return prev;
+              if (page === 1) return [payload, ...prev].slice(0, PAGE_SIZE);
+              return prev;
+            });
+            setTotal(prev => prev + 1);
+          }
+
+          if (payload.event_type === 'deleted_item') {
+            setItems(prev => prev.filter(item => item.object_key !== payload.object_key));
+            setPending(prev => prev.filter(p => p.object_key !== payload.object_key));
+            setSelected(prev => {
+              const next = new Set(prev);
+              next.delete(payload.object_key);
+              return next;
+            });
+            setTotal(prev => Math.max(0, prev - 1));
+          }
+        } catch (err) {
+          console.error("Failed to parse websocket message", err);
         }
+      };
 
-        if (payload.event_type === 'new_item') {
-          setPending(prev => prev.filter(p => p.object_key !== payload.object_key));
-          setItems(prev => {
-            if (prev.some(item => item.object_key === payload.object_key)) return prev;
-            if (page === 1) return [payload, ...prev].slice(0, PAGE_SIZE);
-            return prev;
-          });
-          setTotal(prev => prev + 1);
-        }
+      ws.onerror = (err) => {
+        console.warn("WebSocket error:", err);
+      };
 
-        if (payload.event_type === 'deleted_item') {
-          setItems(prev => prev.filter(item => item.object_key !== payload.object_key));
-          setPending(prev => prev.filter(p => p.object_key !== payload.object_key));
-          setSelected(prev => {
-            const next = new Set(prev);
-            next.delete(payload.object_key);
-            return next;
-          });
-          setTotal(prev => Math.max(0, prev - 1));
-        }
-      } catch (err) {
-        console.error("Failed to parse websocket message", err);
-      }
+      ws.onclose = () => {
+        if (!isMounted) return;
+        // Exponential backoff: retry with increasing delay up to 8s
+        retryTimeout = setTimeout(() => {
+          retryDelay = Math.min(retryDelay * 2, 8000);
+          connect();
+        }, retryDelay);
+      };
     };
 
-    ws.onerror = (err) => {
-      console.error("WebSocket error:", err);
-    };
+    connect();
 
-    return () => ws.close();
-  }, [page]);
+    return () => {
+      isMounted = false;
+      clearTimeout(retryTimeout);
+      if (ws) ws.close();
+    };
+  }, [page, loadPage]);
 
   // Selection helpers
   const toggleSelect = (objectKey) => {
