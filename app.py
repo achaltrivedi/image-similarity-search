@@ -687,18 +687,21 @@ class DeleteRequest(BaseModel):
 @app.delete("/gallery")
 def delete_gallery_items(req: DeleteRequest):
     """
-    Deletes objects from MinIO by key. The existing event listener
-    pipeline will handle DB cleanup and WebSocket notifications.
+    Deletes objects from MinIO by key and immediately:
+    1. Invalidates the bucket key cache (so searches reflect reality instantly).
+    2. Publishes a `deleted_item` WebSocket event for each key (so the UI updates in real-time).
+    The existing event listener pipeline will still handle DB row cleanup asynchronously.
     """
     if not req.object_keys:
         return {"deleted": 0, "failed": 0, "errors": []}
     
-    from utils.minio_utils import get_minio_client
+    from utils.minio_utils import get_minio_client, invalidate_bucket_keys_cache
     client = get_minio_client()
     
     deleted = 0
     failed = 0
     errors = []
+    deleted_keys = []
     
     for key in req.object_keys:
         try:
@@ -709,9 +712,26 @@ def delete_gallery_items(req: DeleteRequest):
             except Exception:
                 pass  # Thumbnail may not exist
             deleted += 1
+            deleted_keys.append(key)
         except Exception as e:
             failed += 1
             errors.append({"object_key": key, "error": str(e)})
+    
+    if deleted_keys:
+        # Fix 1: Immediately invalidate bucket key cache so searches stop showing deleted items
+        invalidate_bucket_keys_cache()
+        
+        # Fix 2: Proactively publish WS events for immediate UI update
+        # (Don't wait for the slow MinIO listener → worker pipeline)
+        try:
+            r = get_redis()
+            for key in deleted_keys:
+                r.publish("gallery_updates", json.dumps({
+                    "object_key": key,
+                    "event_type": "deleted_item",
+                }))
+        except Exception as pub_e:
+            print(f"Warning: Failed to publish delete events: {pub_e}")
     
     return {"deleted": deleted, "failed": failed, "errors": errors}
 
