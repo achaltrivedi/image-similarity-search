@@ -20,8 +20,9 @@ load_dotenv()
 from core.embedding import ImageEmbedder
 from core.color_texture_features import extract_color_features, extract_texture_features
 from core.design_features import extract_design_features
-from utils.minio_utils import get_bucket_keys, presigned_url, presigned_download_url
+from utils.minio_utils import get_bucket_keys, presigned_url, presigned_download_url, download_object
 from utils.minio_config import BUCKET_NAME
+from core.localization import find_subimage_bounding_box
 from core.preprocessor import ImagePreprocessor
 from fastapi import Request
 from core.task_queue import enqueue_minio_record, queue_health, enqueue_full_sync
@@ -242,7 +243,14 @@ async def search_image(
     if query_id:
         # Retrieve cached embedding from Redis
         try:
-            cached_data = get_redis().get(f"query:{query_id}")
+            r = get_redis()
+            cached_data = r.get(f"query:{query_id}")
+            cached_image = r.get(f"query_image:{query_id}")
+            if cached_image:
+                try:
+                    query_image_for_explain = ImagePreprocessor.process(base64.b64decode(cached_image), "cached_query")
+                except Exception as e:
+                    print(f"Warning: Could not decode cached query image: {e}")
         except Exception as e:
             return JSONResponse(
                 status_code=503,
@@ -275,6 +283,7 @@ async def search_image(
         # Use Preprocessor to handle PDF/GIF inputs
         try:
             image = ImagePreprocessor.process(image_bytes, file.filename)
+            query_image_for_explain = image
         except Exception as e:
             return JSONResponse(status_code=400, content={"error": f"Invalid file: {str(e)}"})
         
@@ -299,6 +308,7 @@ async def search_image(
         try:
             r = get_redis()
             r.setex(f"query:{query_id}", 300, json.dumps(query_vector))
+            r.setex(f"query_image:{query_id}", 300, base64.b64encode(image_bytes).decode('utf-8'))
             if query_design_vector:
                 r.setex(f"query_design:{query_id}", 300, json.dumps(query_design_vector))
             if query_color:
@@ -405,6 +415,7 @@ async def search_image(
             image_url = None
             thumbnail_url = None
             download_url = None
+            bounding_box = None
             similarity_scores = {
                 "design": design_sim,
                 "color": round(color_sim, 3),
@@ -433,6 +444,16 @@ async def search_image(
 
             except Exception as e:
                 print(f"Error generating presigned URL for {key}: {e}")
+                
+            # If sub-part localization is requested and similarity > 50%, find bounding box
+            if query_image_for_explain and similarity >= 0.50:
+                try:
+                    # Download lightweight thumbnail for faster CV processing
+                    target_bytes = download_object(thumb_key) if thumbnail_url != image_url else download_object(key)
+                    target_image = ImagePreprocessor.process(target_bytes, "target")
+                    bounding_box = find_subimage_bounding_box(query_image_for_explain, target_image)
+                except Exception as e:
+                    print(f"Failed to find bounding box natively for {key}: {e}")
 
             results.append({
                 "image_key": key,
@@ -441,7 +462,8 @@ async def search_image(
                 "thumbnail_url": thumbnail_url,
                 "download_url": download_url,
                 "similarity_scores": similarity_scores,
-                "file_size": file_size
+                "file_size": file_size,
+                "bounding_box": bounding_box
             })
     finally:
         db.close()
