@@ -33,7 +33,10 @@ def find_subimage_bounding_box(query_image: Image.Image, full_image: Image.Image
         kp1, des1 = sift.detectAndCompute(query_cv, None)
         kp2, des2 = sift.detectAndCompute(full_cv, None)
 
+        print(f"[SIFT CV] Query Keypoints: {len(kp1) if kp1 else 0}, Target Keypoints: {len(kp2) if kp2 else 0}")
+
         if des1 is None or des2 is None or len(kp1) < 4 or len(kp2) < 4:
+            print("[SIFT CV] Not enough keypoints found.")
             return None
 
         # FLANN parameters
@@ -52,8 +55,10 @@ def find_subimage_bounding_box(query_image: Image.Image, full_image: Image.Image
                 if m.distance < 0.7 * n.distance:
                     good_matches.append(m)
 
-        # Need at least 10 good matches to compute homography reliably
-        MIN_MATCH_COUNT = 10
+        print(f"[SIFT CV] Good matches found: {len(good_matches)}")
+
+        # Need at least 5 good matches to compute homography reliably
+        MIN_MATCH_COUNT = 5
         if len(good_matches) > MIN_MATCH_COUNT:
             src_pts = np.float32([kp1[m.queryIdx].pt for m in good_matches]).reshape(-1, 1, 2)
             dst_pts = np.float32([kp2[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2)
@@ -67,22 +72,40 @@ def find_subimage_bounding_box(query_image: Image.Image, full_image: Image.Image
             if M is not None:
                 h, w = query_cv.shape
                 pts = np.float32([[0, 0], [0, h - 1], [w - 1, h - 1], [w - 1, 0]]).reshape(-1, 1, 2)
-                dst = cv2.perspectiveTransform(pts, M)
                 
-                # Geometric Validation: Prevent non-linear "bowtie" or impossible distortions
-                dst_int = dst.astype(np.int32)
-                if cv2.isContourConvex(dst_int):
+                try:
+                    dst = cv2.perspectiveTransform(pts, M)
+                    print(f"[SIFT CV] Homography matrix perspective transform succeeded.")
+                    
+                    # Geometric Validation: Prevent non-linear "bowtie" or impossible distortions
+                    dst_int = dst.astype(np.int32)
                     area = cv2.contourArea(dst)
                     fh, fw = full_cv.shape
                     total_area = fh * fw
-                    if total_area * 0.001 < area <= total_area:
-                        box_coords = dst
+                    
+                    if area > total_area * 0.00001:  # Relaxed to 0.001% area
+                        if cv2.isContourConvex(dst_int):
+                            box_coords = dst
+                        else:
+                            print("[SIFT CV] Invalid geometric polygon detected, forcing Axis-Aligned Bounding Box.")
+                            ix, iy, iw, ih = cv2.boundingRect(dst_int)
+                            box_coords = np.float32([
+                                [[ix, iy]],
+                                [[ix, iy + ih]],
+                                [[ix + iw, iy + ih]],
+                                [[ix + iw, iy]]
+                            ])
+                    else:
+                        print(f"[SIFT CV] Match rejected: area too small ({area} px)")
+                except Exception as e:
+                    print(f"[SIFT CV] Perspective transform failed: {e}")
                         
             # FALLBACK 1: Distorted Homography -> Use Bounding Rect of Mathematical Inliers
             # Only use if we have a robust dense cluster to avoid drawing boxes from noisy scattered RANSAC points
             if box_coords is None and mask is not None:
                 inliers = dst_pts[mask.ravel() == 1]
-                if len(inliers) >= 10:
+                if len(inliers) >= 4:
+                    print("[SIFT CV] Falling back to spanning box over inliers.")
                     ix, iy, iw, ih = cv2.boundingRect(inliers)
                     box_coords = np.float32([
                         [[ix, iy]],
@@ -108,7 +131,7 @@ def find_subimage_bounding_box(query_image: Image.Image, full_image: Image.Image
         fh, fw = full_cv.shape
         query_area_ratio = (qh * qw) / (fh * fw)
         
-        if (query_area_ratio >= 0.05  # query must be at least 5% of the full image area
+        if (query_area_ratio >= 0.001  # query must be at least 0.1% of the full image area
                 and qh <= fh and qw <= fw):
             res = cv2.matchTemplate(full_cv, query_cv, cv2.TM_CCOEFF_NORMED)
             _, max_val, _, max_loc = cv2.minMaxLoc(res)
