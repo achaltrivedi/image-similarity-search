@@ -14,6 +14,34 @@ CREATE TABLE IF NOT EXISTS image_embeddings (
     minio_metadata JSONB
 );
 
+CREATE TABLE IF NOT EXISTS search_settings (
+    id SERIAL PRIMARY KEY,
+    settings_key VARCHAR UNIQUE NOT NULL DEFAULT 'search',
+    default_results_per_page INTEGER NOT NULL DEFAULT 50,
+    similarity_threshold DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+    semantic_weight DOUBLE PRECISION NOT NULL DEFAULT 0.55,
+    design_weight DOUBLE PRECISION NOT NULL DEFAULT 0.20,
+    color_weight DOUBLE PRECISION NOT NULL DEFAULT 0.15,
+    texture_weight DOUBLE PRECISION NOT NULL DEFAULT 0.10,
+    enable_sub_part_localization BOOLEAN NOT NULL DEFAULT TRUE,
+    bounding_box_effect VARCHAR NOT NULL DEFAULT 'scanner',
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+INSERT INTO search_settings (
+    settings_key,
+    default_results_per_page,
+    similarity_threshold,
+    semantic_weight,
+    design_weight,
+    color_weight,
+    texture_weight,
+    enable_sub_part_localization,
+    bounding_box_effect
+)
+VALUES ('search', 50, 0.0, 0.55, 0.20, 0.15, 0.10, TRUE, 'scanner')
+ON CONFLICT (settings_key) DO NOTHING;
+
 -- HNSW index for fast CLIP cosine similarity search at scale
 CREATE INDEX IF NOT EXISTS idx_image_embeddings_vector
 ON image_embeddings
