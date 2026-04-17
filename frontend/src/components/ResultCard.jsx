@@ -1,3 +1,4 @@
+import { useId } from 'react';
 import {
   Eye,
   Download,
@@ -44,10 +45,82 @@ const LABEL_COLORS = {
   purple: 'text-purple-600 dark:text-purple-400',
 };
 
+function buildScannerGeometry(points) {
+  if (!Array.isArray(points) || points.length < 3) {
+    return null;
+  }
+
+  const normalizedPoints = points
+    .map((point) => ({
+      x: Number(point?.x),
+      y: Number(point?.y),
+    }))
+    .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y))
+    .map((point) => ({
+      x: Math.min(1, Math.max(0, point.x)),
+      y: Math.min(1, Math.max(0, point.y)),
+    }));
+
+  if (normalizedPoints.length < 3) {
+    return null;
+  }
+
+  const svgPoints = normalizedPoints.map((point) => ({
+    x: point.x * 100,
+    y: point.y * 100,
+  }));
+
+  const pointString = svgPoints
+    .map((point) => `${point.x.toFixed(2)},${point.y.toFixed(2)}`)
+    .join(' ');
+  const polygonPath =
+    svgPoints
+      .map((point, index) =>
+        `${index === 0 ? 'M' : 'L'} ${point.x.toFixed(2)} ${point.y.toFixed(2)}`,
+      )
+      .join(' ') + ' Z';
+
+  const xs = svgPoints.map((point) => point.x);
+  const ys = svgPoints.map((point) => point.y);
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+  const width = Math.max(6, maxX - minX);
+  const height = Math.max(6, maxY - minY);
+  const perimeter = svgPoints.reduce((total, point, index) => {
+    const nextPoint = svgPoints[(index + 1) % svgPoints.length];
+    return total + Math.hypot(nextPoint.x - point.x, nextPoint.y - point.y);
+  }, 0);
+
+  return {
+    pointString,
+    polygonPath,
+    overlayPath: `M 0 0 H 100 V 100 H 0 Z ${polygonPath}`,
+    minX,
+    maxX,
+    minY,
+    maxY,
+    width,
+    height,
+    perimeter,
+    svgPoints,
+  };
+}
+
 export default function ResultCard({ result, rank }) {
+  const svgIdBase = useId().replace(/[^a-zA-Z0-9_-]/g, '');
   const filename = result.image_key?.split('/').pop() || 'Unknown';
   const similarity = (result.similarity * 100).toFixed(1);
   const scores = result.similarity_scores || {};
+  const scannerGeometry = buildScannerGeometry(result.bounding_box);
+  const hasBoundingBox = Boolean(scannerGeometry);
+
+  const clipId = `${svgIdBase}-clip`;
+  const glowId = `${svgIdBase}-glow`;
+  const blurId = `${svgIdBase}-blur`;
+  const scanGradientId = `${svgIdBase}-scan`;
+  const focusGradientId = `${svgIdBase}-focus`;
 
   const formatBytes = (bytes) => {
     if (!bytes) return 'Unknown Size';
@@ -61,7 +134,7 @@ export default function ResultCard({ result, rank }) {
   return (
     <Card className='overflow-hidden p-0'>
       {/* Image Container */}
-      <div className='relative aspect-square bg-muted'>
+      <div className='relative aspect-square overflow-hidden bg-muted'>
         <img
           src={result.thumbnail_url || result.image_url}
           alt={filename}
@@ -81,20 +154,221 @@ export default function ResultCard({ result, rank }) {
         />
 
         {/* Sub-Part Bounding Box Overlay */}
-        {result.bounding_box && result.bounding_box.length > 0 && (
-          <svg 
-            className="absolute inset-0 w-full h-full pointer-events-none" 
-            viewBox="0 0 100 100" 
-            preserveAspectRatio="none" 
+        {hasBoundingBox && (
+          <svg
+            className='absolute inset-0 h-full w-full pointer-events-none'
+            viewBox='0 0 100 100'
+            preserveAspectRatio='none'
             style={{ zIndex: 10 }}
           >
-            <polygon 
-              points={result.bounding_box.map(pt => `${pt.x * 100},${pt.y * 100}`).join(' ')} 
-              fill="rgba(239, 68, 68, 0.25)" 
-              stroke="rgb(239, 68, 68)" 
-              strokeWidth="2" 
-              vectorEffect="non-scaling-stroke" 
-            />
+            <defs>
+              <clipPath id={clipId}>
+                <polygon points={scannerGeometry.pointString} />
+              </clipPath>
+              <filter id={glowId} x='-40%' y='-40%' width='180%' height='180%'>
+                <feGaussianBlur stdDeviation='1.6' result='blur' />
+                <feColorMatrix
+                  in='blur'
+                  type='matrix'
+                  values='1 0 0 0 0.22 0 1 0 0 0.58 0 0 1 0 0.98 0 0 0 1 0'
+                />
+              </filter>
+              <filter id={blurId} x='-15%' y='-15%' width='130%' height='130%'>
+                <feGaussianBlur stdDeviation='1.1' />
+              </filter>
+              <linearGradient id={scanGradientId} x1='0' y1='0' x2='0' y2='1'>
+                <stop offset='0%' stopColor='rgba(56, 189, 248, 0)' />
+                <stop offset='38%' stopColor='rgba(96, 165, 250, 0.18)' />
+                <stop offset='70%' stopColor='rgba(125, 211, 252, 0.42)' />
+                <stop offset='100%' stopColor='rgba(191, 219, 254, 0)' />
+              </linearGradient>
+              <radialGradient id={focusGradientId} cx='50%' cy='50%' r='65%'>
+                <stop offset='0%' stopColor='rgba(255, 255, 255, 0.16)' />
+                <stop offset='55%' stopColor='rgba(96, 165, 250, 0.12)' />
+                <stop offset='100%' stopColor='rgba(14, 165, 233, 0.02)' />
+              </radialGradient>
+            </defs>
+
+            <path
+              d={scannerGeometry.overlayPath}
+              fill='rgba(2, 8, 23, 0.54)'
+              fillRule='evenodd'
+            >
+              <animate
+                attributeName='opacity'
+                values='0;0.54'
+                dur='380ms'
+                fill='freeze'
+              />
+            </path>
+
+            <path
+              d={scannerGeometry.overlayPath}
+              fill='rgba(15, 23, 42, 0.22)'
+              fillRule='evenodd'
+              filter={`url(#${blurId})`}
+            >
+              <animate
+                attributeName='opacity'
+                values='0;0.22'
+                dur='580ms'
+                fill='freeze'
+              />
+            </path>
+
+            <polygon
+              points={scannerGeometry.pointString}
+              fill={`url(#${focusGradientId})`}
+              opacity='0'
+            >
+              <animate
+                attributeName='opacity'
+                values='0;0.9'
+                dur='650ms'
+                begin='150ms'
+                fill='freeze'
+              />
+            </polygon>
+
+            <polygon
+              points={scannerGeometry.pointString}
+              fill='none'
+              stroke='rgba(125, 211, 252, 0.95)'
+              strokeWidth='5'
+              filter={`url(#${glowId})`}
+              opacity='0'
+              vectorEffect="non-scaling-stroke"
+            >
+              <animate
+                attributeName='opacity'
+                values='0;0.8;0.55;0.8'
+                dur='3.2s'
+                begin='350ms'
+                repeatCount='indefinite'
+              />
+            </polygon>
+
+            <polygon
+              points={scannerGeometry.pointString}
+              fill='rgba(56, 189, 248, 0.08)'
+              stroke='rgb(125, 211, 252)'
+              strokeWidth='2.25'
+              vectorEffect='non-scaling-stroke'
+              strokeDasharray={scannerGeometry.perimeter.toFixed(2)}
+              strokeDashoffset={scannerGeometry.perimeter.toFixed(2)}
+            >
+              <animate
+                attributeName='stroke-dashoffset'
+                from={scannerGeometry.perimeter.toFixed(2)}
+                to='0'
+                dur='900ms'
+                fill='freeze'
+              />
+              <animate
+                attributeName='opacity'
+                values='0;1'
+                dur='250ms'
+                fill='freeze'
+              />
+            </polygon>
+
+            <g clipPath={`url(#${clipId})`}>
+              <rect
+                x={(scannerGeometry.minX - scannerGeometry.width * 0.2).toFixed(2)}
+                y={(scannerGeometry.minY - Math.max(18, scannerGeometry.height * 0.8)).toFixed(2)}
+                width={Math.max(24, scannerGeometry.width * 1.4).toFixed(2)}
+                height={Math.max(18, scannerGeometry.height * 0.8).toFixed(2)}
+                fill={`url(#${scanGradientId})`}
+                opacity='0'
+              >
+                <animate
+                  attributeName='opacity'
+                  values='0;0.95;0.95'
+                  dur='400ms'
+                  begin='350ms'
+                  fill='freeze'
+                />
+                <animate
+                  attributeName='y'
+                  values={[
+                    (scannerGeometry.minY - Math.max(18, scannerGeometry.height * 0.8)).toFixed(2),
+                    (scannerGeometry.maxY + 2).toFixed(2),
+                    (scannerGeometry.minY - Math.max(18, scannerGeometry.height * 0.8)).toFixed(2),
+                  ].join(';')}
+                  dur='3s'
+                  begin='700ms'
+                  repeatCount='indefinite'
+                />
+              </rect>
+
+              <line
+                x1={(scannerGeometry.minX - 2).toFixed(2)}
+                x2={(scannerGeometry.maxX + 2).toFixed(2)}
+                y1={scannerGeometry.minY.toFixed(2)}
+                y2={scannerGeometry.minY.toFixed(2)}
+                stroke='rgba(224, 242, 254, 0.95)'
+                strokeWidth='1.2'
+                opacity='0'
+                vectorEffect='non-scaling-stroke'
+              >
+                <animate
+                  attributeName='opacity'
+                  values='0;1;1'
+                  dur='400ms'
+                  begin='500ms'
+                  fill='freeze'
+                />
+                <animate
+                  attributeName='y1'
+                  values={[
+                    scannerGeometry.minY.toFixed(2),
+                    scannerGeometry.maxY.toFixed(2),
+                    scannerGeometry.minY.toFixed(2),
+                  ].join(';')}
+                  dur='3s'
+                  begin='700ms'
+                  repeatCount='indefinite'
+                />
+                <animate
+                  attributeName='y2'
+                  values={[
+                    scannerGeometry.minY.toFixed(2),
+                    scannerGeometry.maxY.toFixed(2),
+                    scannerGeometry.minY.toFixed(2),
+                  ].join(';')}
+                  dur='3s'
+                  begin='700ms'
+                  repeatCount='indefinite'
+                />
+              </line>
+            </g>
+
+            {scannerGeometry.svgPoints.map((point, index) => (
+              <circle
+                key={index}
+                cx={point.x.toFixed(2)}
+                cy={point.y.toFixed(2)}
+                r='1.25'
+                fill='white'
+                opacity='0'
+                vectorEffect="non-scaling-stroke"
+              >
+                <animate
+                  attributeName='opacity'
+                  values='0;1;0.7;1'
+                  dur='2.6s'
+                  begin={`${0.15 + index * 0.08}s`}
+                  repeatCount='indefinite'
+                />
+                <animate
+                  attributeName='r'
+                  values='0.65;1.45;1.1;1.45'
+                  dur='2.6s'
+                  begin={`${0.15 + index * 0.08}s`}
+                  repeatCount='indefinite'
+                />
+              </circle>
+            ))}
           </svg>
         )}
 
