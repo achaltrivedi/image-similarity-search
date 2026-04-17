@@ -108,13 +108,19 @@ function buildScannerGeometry(points) {
   };
 }
 
-export default function ResultCard({ result, rank }) {
+export default function ResultCard({
+  result,
+  rank,
+  boundingBoxEffect = 'scanner',
+}) {
   const svgIdBase = useId().replace(/[^a-zA-Z0-9_-]/g, '');
   const filename = result.image_key?.split('/').pop() || 'Unknown';
   const similarity = (result.similarity * 100).toFixed(1);
   const scores = result.similarity_scores || {};
   const scannerGeometry = buildScannerGeometry(result.bounding_box);
-  const hasBoundingBox = Boolean(scannerGeometry);
+  const hasBoundingBox = Boolean(scannerGeometry) && boundingBoxEffect !== 'off';
+  const showScanner = hasBoundingBox && boundingBoxEffect === 'scanner';
+  const showSimpleHighlight = hasBoundingBox && boundingBoxEffect === 'simple';
 
   const clipId = `${svgIdBase}-clip`;
   const glowId = `${svgIdBase}-glow`;
@@ -154,7 +160,24 @@ export default function ResultCard({ result, rank }) {
         />
 
         {/* Sub-Part Bounding Box Overlay */}
-        {hasBoundingBox && (
+        {showSimpleHighlight && (
+          <svg
+            className='absolute inset-0 h-full w-full pointer-events-none'
+            viewBox='0 0 100 100'
+            preserveAspectRatio='none'
+            style={{ zIndex: 10 }}
+          >
+            <polygon
+              points={scannerGeometry.pointString}
+              fill='rgba(56, 189, 248, 0.16)'
+              stroke='rgba(125, 211, 252, 0.95)'
+              strokeWidth='2.4'
+              vectorEffect='non-scaling-stroke'
+            />
+          </svg>
+        )}
+
+        {showScanner && (
           <svg
             className='absolute inset-0 h-full w-full pointer-events-none'
             viewBox='0 0 100 100'
