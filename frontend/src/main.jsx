@@ -7,16 +7,19 @@ import App from './App';
 
 import { ThemeProvider } from '@/components/theme-provider';
 import { Toaster } from '@/components/ui/sonner';
+import { SearchSettingsProvider } from '@/context/SearchSettingsContext';
 
 import { BrowserRouter } from 'react-router';
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <BrowserRouter>
-      <ThemeProvider defaultTheme="dark" storageKey="vite-ui-theme">
-        <Toaster richColors position="top-right" />
-        <App />
-      </ThemeProvider>
+      <SearchSettingsProvider>
+        <ThemeProvider defaultTheme="dark" storageKey="vite-ui-theme">
+          <Toaster richColors position="top-right" />
+          <App />
+        </ThemeProvider>
+      </SearchSettingsProvider>
     </BrowserRouter>
   </React.StrictMode>,
 );
