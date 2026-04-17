@@ -16,6 +16,8 @@ import SearchBox from '@/components/SearchBox';
 
 // API
 import { searchImage, searchNextPage, syncBucket } from '@/api/searchService';
+import { useSearchSettings } from '@/context/SearchSettingsContext';
+import { DEFAULT_SEARCH_SETTINGS } from '@/lib/searchSettings';
 
 function Home() {
   const [results, setResults] = useState([]);
@@ -27,6 +29,8 @@ function Home() {
   const [totalResults, setTotalResults] = useState(0);
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState(null);
+  const { settings } = useSearchSettings();
+  const effectiveSettings = settings || DEFAULT_SEARCH_SETTINGS;
 
   const handleSearch = async (file) => {
     setLoading(true);
@@ -38,7 +42,7 @@ function Home() {
     setTotalResults(0);
 
     try {
-      const data = await searchImage(file);
+      const data = await searchImage(file, effectiveSettings);
       setResults(data.results || []);
       setQueryId(data.query_id);
       setPage(2); // Next page to load
@@ -55,7 +59,7 @@ function Home() {
     if (!queryId || !hasMore) return;
 
     try {
-      const data = await searchNextPage(queryId, page);
+      const data = await searchNextPage(queryId, page, effectiveSettings);
       setResults((prev) => [...prev, ...data.results]);
       setPage((prev) => prev + 1);
       setHasMore(data.has_more || false);
@@ -155,7 +159,10 @@ function Home() {
               </div>
             }
           >
-            <ResultsGrid results={results} />
+            <ResultsGrid
+              results={results}
+              boundingBoxEffect={effectiveSettings.bounding_box_effect}
+            />
           </InfiniteScroll>
         </div>
       )}
