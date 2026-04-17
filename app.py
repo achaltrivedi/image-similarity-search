@@ -1,6 +1,6 @@
 # app.py
 
-from fastapi import FastAPI, UploadFile, File, Form, WebSocket, WebSocketDisconnect, Query
+from fastapi import Body, FastAPI, UploadFile, File, Form, WebSocket, WebSocketDisconnect, Query
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, HTMLResponse
 import os
@@ -26,7 +26,13 @@ from core.localization import find_subimage_bounding_box
 from core.preprocessor import ImagePreprocessor
 from fastapi import Request
 from core.task_queue import enqueue_minio_record, queue_health, enqueue_full_sync
-from core.database import SessionLocal, ImageEmbedding, init_db
+from core.database import SessionLocal, ImageEmbedding, SearchSettings, init_db
+from core.search_settings import (
+    DEFAULT_SEARCH_SETTINGS,
+    build_effective_search_settings,
+    compute_weighted_similarity,
+    normalize_search_settings,
+)
 from core.task_queue import enqueue_minio_record, queue_health
 
 # Lazy Redis client (avoids crash if Redis starts after the app)
@@ -66,6 +72,62 @@ def health_check():
     return {"status": "ok"}
 
 ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:5174").split(",")
+
+
+def _serialize_search_settings(row: SearchSettings | None) -> dict:
+    if row is None:
+        return DEFAULT_SEARCH_SETTINGS.copy()
+    return normalize_search_settings({
+        "default_results_per_page": row.default_results_per_page,
+        "similarity_threshold": row.similarity_threshold,
+        "weights": {
+            "semantic": row.semantic_weight,
+            "design": row.design_weight,
+            "color": row.color_weight,
+            "texture": row.texture_weight,
+        },
+        "enable_sub_part_localization": row.enable_sub_part_localization,
+        "bounding_box_effect": row.bounding_box_effect,
+    })
+
+
+def _get_or_create_search_settings(db) -> SearchSettings:
+    row = db.query(SearchSettings).filter(SearchSettings.settings_key == "search").first()
+    if row:
+        return row
+
+    defaults = DEFAULT_SEARCH_SETTINGS
+    row = SearchSettings(
+        settings_key="search",
+        default_results_per_page=defaults["default_results_per_page"],
+        similarity_threshold=defaults["similarity_threshold"],
+        semantic_weight=defaults["weights"]["semantic"],
+        design_weight=defaults["weights"]["design"],
+        color_weight=defaults["weights"]["color"],
+        texture_weight=defaults["weights"]["texture"],
+        enable_sub_part_localization=defaults["enable_sub_part_localization"],
+        bounding_box_effect=defaults["bounding_box_effect"],
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def _save_search_settings(db, payload: dict) -> dict:
+    normalized = normalize_search_settings(payload)
+    row = _get_or_create_search_settings(db)
+    row.default_results_per_page = normalized["default_results_per_page"]
+    row.similarity_threshold = normalized["similarity_threshold"]
+    row.semantic_weight = normalized["weights"]["semantic"]
+    row.design_weight = normalized["weights"]["design"]
+    row.color_weight = normalized["weights"]["color"]
+    row.texture_weight = normalized["weights"]["texture"]
+    row.enable_sub_part_localization = normalized["enable_sub_part_localization"]
+    row.bounding_box_effect = normalized["bounding_box_effect"]
+    db.commit()
+    db.refresh(row)
+    return _serialize_search_settings(row)
 
 # ------------------------
 # WEBSOCKET MANAGER
@@ -196,6 +258,25 @@ def health():
 # ------------------------
 
 
+@app.get("/settings/search")
+def get_search_settings_endpoint():
+    db = SessionLocal()
+    try:
+        row = _get_or_create_search_settings(db)
+        return _serialize_search_settings(row)
+    finally:
+        db.close()
+
+
+@app.put("/settings/search")
+def update_search_settings_endpoint(payload: dict = Body(...)):
+    db = SessionLocal()
+    try:
+        return _save_search_settings(db, payload)
+    finally:
+        db.close()
+
+
 
 # ------------------------
 # SEARCH ENDPOINT
@@ -205,52 +286,81 @@ async def search_image(
     file: UploadFile = File(None),
     query_id: str = Form(None),
     page: int = Form(1),
-    page_size: int = Form(50),
-    similarity_threshold: float = Form(0.0)  # Default: show all results (100% to 0%)
+    page_size: int | None = Form(None),
+    similarity_threshold: float | None = Form(None),
+    semantic_weight: float | None = Form(None),
+    design_weight: float | None = Form(None),
+    color_weight: float | None = Form(None),
+    texture_weight: float | None = Form(None),
+    enable_sub_part_localization: bool | None = Form(None),
 ):
     """
     Search for similar images with pagination support.
-    
-    Args:
-        file: Image file to search (required on first request)
-        query_id: Cached query ID from previous request (for pagination)
-        page: Page number (1-indexed)
-        page_size: Results per page (default: 50)
-        similarity_threshold: Minimum similarity (0.0-1.0, default: 0.0 = all results)
-    
-    Returns:
-        {
-            "results": [...],
-            "query_id": "abc123",
-            "page": 1,
-            "page_size": 50,
-            "has_more": true,
-            "total_results": 154
-        }
     """
     global embedder
-    
-    # Initialize variables used in both first-request and paginated paths
+
     query_design_vector = None
+    query_color = None
+    query_texture = None
     query_image_for_explain = None
-    
-    # Lazy load embedder
+    requested_page_size = page_size
+
+    settings_db = SessionLocal()
+    try:
+        saved_search_settings = _serialize_search_settings(_get_or_create_search_settings(settings_db))
+    finally:
+        settings_db.close()
+
+    search_overrides = {"weights": {}}
+    if page_size is not None:
+        search_overrides["default_results_per_page"] = page_size
+    if similarity_threshold is not None:
+        search_overrides["similarity_threshold"] = similarity_threshold
+    if semantic_weight is not None:
+        search_overrides["weights"]["semantic"] = semantic_weight
+    if design_weight is not None:
+        search_overrides["weights"]["design"] = design_weight
+    if color_weight is not None:
+        search_overrides["weights"]["color"] = color_weight
+    if texture_weight is not None:
+        search_overrides["weights"]["texture"] = texture_weight
+    if enable_sub_part_localization is not None:
+        search_overrides["enable_sub_part_localization"] = enable_sub_part_localization
+    if not search_overrides["weights"]:
+        search_overrides.pop("weights")
+
+    effective_search_settings = build_effective_search_settings(
+        saved_search_settings,
+        search_overrides,
+    )
+    page_size = effective_search_settings["default_results_per_page"]
+
     if embedder is None:
         print("Loading embedder lazily...")
         embedder = ImageEmbedder()
-    
-    # Get or compute query embedding
+
     if query_id:
-        # Retrieve cached embedding from Redis
         try:
             r = get_redis()
             cached_data = r.get(f"query:{query_id}")
             cached_image = r.get(f"query_image:{query_id}")
+            cached_settings = r.get(f"query_settings:{query_id}")
             if cached_image:
                 try:
-                    query_image_for_explain = ImagePreprocessor.process(base64.b64decode(cached_image), "cached_query")
+                    query_image_for_explain = ImagePreprocessor.process(
+                        base64.b64decode(cached_image),
+                        "cached_query",
+                    )
                 except Exception as e:
                     print(f"Warning: Could not decode cached query image: {e}")
+            if cached_settings:
+                effective_search_settings = build_effective_search_settings(json.loads(cached_settings))
+                if requested_page_size is not None:
+                    effective_search_settings = build_effective_search_settings(
+                        effective_search_settings,
+                        {"default_results_per_page": requested_page_size},
+                    )
+                page_size = effective_search_settings["default_results_per_page"]
         except Exception as e:
             return JSONResponse(
                 status_code=503,
@@ -263,37 +373,31 @@ async def search_image(
             )
         query_vector = json.loads(cached_data)
     else:
-        # First request: compute embedding and cache it
         if not file:
             return JSONResponse(
                 status_code=400,
                 content={"error": "Either 'file' or 'query_id' must be provided"}
             )
-        
+
         image_bytes = await file.read()
-        
-        # Enforce file size limit (50MB)
-        MAX_FILE_SIZE = 50 * 1024 * 1024
-        if len(image_bytes) > MAX_FILE_SIZE:
+
+        max_file_size = 50 * 1024 * 1024
+        if len(image_bytes) > max_file_size:
             return JSONResponse(
                 status_code=413,
                 content={"error": f"File too large ({len(image_bytes) // (1024*1024)}MB). Maximum is 50MB."}
             )
-        
-        # Use Preprocessor to handle PDF/GIF inputs
+
         try:
             image = ImagePreprocessor.process(image_bytes, file.filename)
             query_image_for_explain = image
         except Exception as e:
             return JSONResponse(status_code=400, content={"error": f"Invalid file: {str(e)}"})
-        
-        # Generate embedding (with concurrency limit to prevent GPU OOM)
+
         with _embed_semaphore:
             query_embedding = embedder.embed_images([image])
-        query_np = query_embedding[0]
-        query_vector = query_np.tolist()
-        
-        # Generate design feature vector for structural search
+        query_vector = query_embedding[0].tolist()
+
         try:
             query_design_vector = extract_design_features(image)
             query_color = extract_color_features(image)
@@ -302,13 +406,13 @@ async def search_image(
             query_design_vector = None
             query_color = None
             query_texture = None
-        
-        # Generate unique query ID and cache embeddings (5 min TTL)
+
         query_id = hashlib.md5(image_bytes).hexdigest()
         try:
             r = get_redis()
             r.setex(f"query:{query_id}", 300, json.dumps(query_vector))
-            r.setex(f"query_image:{query_id}", 300, base64.b64encode(image_bytes).decode('utf-8'))
+            r.setex(f"query_image:{query_id}", 300, base64.b64encode(image_bytes).decode("utf-8"))
+            r.setex(f"query_settings:{query_id}", 300, json.dumps(effective_search_settings))
             if query_design_vector:
                 r.setex(f"query_design:{query_id}", 300, json.dumps(query_design_vector))
             if query_color:
@@ -317,138 +421,142 @@ async def search_image(
                 r.setex(f"query_texture:{query_id}", 300, json.dumps(query_texture))
         except Exception as e:
             print(f"Warning: Failed to cache query in Redis: {e}")
-            # Search still works without caching, just can't paginate
-    
-    # Get cached set of keys that actually exist in the bucket
+
     try:
         bucket_keys = get_bucket_keys()
     except Exception as e:
         print(f"Warning: Could not fetch bucket keys, skipping existence filter: {e}")
-        bucket_keys = None  # Skip filtering if bucket is unreachable
-    
-    # Recover query vectors (for paginated requests)
+        bucket_keys = None
+
     if query_design_vector is None:
         try:
             r = get_redis()
             cached_dv = r.get(f"query_design:{query_id}")
             if cached_dv:
                 query_design_vector = json.loads(cached_dv)
-                
+
             cached_c = r.get(f"query_color:{query_id}")
             if cached_c:
                 query_color = json.loads(cached_c)
-                
+
             cached_t = r.get(f"query_texture:{query_id}")
             if cached_t:
                 query_texture = json.loads(cached_t)
         except Exception:
             query_color = None
             query_texture = None
-    
-    # Query PostgreSQL — fetch ALL matching results with both distances
+
     db = SessionLocal()
     try:
-        # Build query with CLIP distance + optional design distance
-        clip_distance = ImageEmbedding.embedding.cosine_distance(query_vector).label('clip_distance')
-        
-        # Build optional distance projections
+        clip_distance = ImageEmbedding.embedding.cosine_distance(query_vector).label("clip_distance")
         projections = [
             ImageEmbedding.object_key,
             clip_distance,
-            ImageEmbedding.minio_metadata
+            ImageEmbedding.minio_metadata,
         ]
-        
-        if query_design_vector:
-            projections.append(ImageEmbedding.design_embedding.cosine_distance(query_design_vector).label('design_distance'))
-            
-        if query_color:
-            projections.append(ImageEmbedding.color_embedding.cosine_distance(query_color).label('color_distance'))
-            
-        if query_texture:
-            projections.append(ImageEmbedding.texture_embedding.cosine_distance(query_texture).label('texture_distance'))
 
-        results_query = db.query(*projections).filter(
-            ImageEmbedding.embedding.cosine_distance(query_vector) <= (1 - similarity_threshold)
-        ).order_by('clip_distance')
-        
-        # Filter results — rank by CLIP similarity (overall)
+        if query_design_vector:
+            projections.append(
+                ImageEmbedding.design_embedding.cosine_distance(query_design_vector).label("design_distance")
+            )
+        if query_color:
+            projections.append(
+                ImageEmbedding.color_embedding.cosine_distance(query_color).label("color_distance")
+            )
+        if query_texture:
+            projections.append(
+                ImageEmbedding.texture_embedding.cosine_distance(query_texture).label("texture_distance")
+            )
+
+        results_query = db.query(*projections).order_by("clip_distance")
         all_matches = []
-        
+
         for row in results_query:
             if bucket_keys is not None and row.object_key not in bucket_keys:
-                continue  # Skip — image no longer in bucket
-            
-            clip_sim = float(1 - row.clip_distance)
-            
-            # Extract similarities natively from DB
-            design_sim = 0.0
-            if query_design_vector and hasattr(row, 'design_distance') and row.design_distance is not None:
-                design_sim = float(1 - row.design_distance)
-                
-            color_sim = 0.0
-            if query_color and hasattr(row, 'color_distance') and row.color_distance is not None:
+                continue
+
+            semantic_sim = max(0.0, float(1 - row.clip_distance))
+            design_sim = None
+            color_sim = None
+            texture_sim = None
+
+            if query_design_vector and hasattr(row, "design_distance") and row.design_distance is not None:
+                design_sim = max(0.0, float(1 - row.design_distance))
+            if query_color and hasattr(row, "color_distance") and row.color_distance is not None:
                 color_sim = max(0.0, float(1 - row.color_distance))
-                
-            texture_sim = 0.0
-            if query_texture and hasattr(row, 'texture_distance') and row.texture_distance is not None:
+            if query_texture and hasattr(row, "texture_distance") and row.texture_distance is not None:
                 texture_sim = max(0.0, float(1 - row.texture_distance))
-            
-            # Extract file size
+
+            combined_similarity = compute_weighted_similarity(
+                {
+                    "semantic": semantic_sim,
+                    "design": design_sim,
+                    "color": color_sim,
+                    "texture": texture_sim,
+                },
+                effective_search_settings["weights"],
+            )
+            if combined_similarity < effective_search_settings["similarity_threshold"]:
+                continue
+
             file_size = None
-            if hasattr(row, 'minio_metadata') and row.minio_metadata:
+            if hasattr(row, "minio_metadata") and row.minio_metadata:
                 file_size = row.minio_metadata.get("file_size")
-            
-            all_matches.append((row.object_key, clip_sim, design_sim, color_sim, texture_sim, file_size))
-        
-        # Sort by CLIP similarity (overall) — pure semantic ranking
-        all_matches.sort(key=lambda x: x[1], reverse=True)
-        
-        # Paginate the filtered results in Python
+
+            all_matches.append((
+                row.object_key,
+                combined_similarity,
+                semantic_sim,
+                design_sim,
+                color_sim,
+                texture_sim,
+                file_size,
+            ))
+
+        all_matches.sort(key=lambda item: (item[1], item[2]), reverse=True)
+
         total_results = len(all_matches)
         offset = (page - 1) * page_size
         page_matches = all_matches[offset:offset + page_size]
-        
-        print(f"Search page {page}: {len(page_matches)} results (filtered {total_results} from DB)")
-        
+
+        print(
+            f"Search page {page}: {len(page_matches)} results "
+            f"(filtered {total_results} using configured settings)"
+        )
+
         results = []
-        for key, similarity, design_sim, color_sim, texture_sim, file_size in page_matches:
+        for key, similarity, semantic_sim, design_sim, color_sim, texture_sim, file_size in page_matches:
             image_url = None
             thumbnail_url = None
             download_url = None
             bounding_box = None
+            thumb_key = f".thumbnails/{key}.png"
             similarity_scores = {
-                "design": design_sim,
-                "color": round(color_sim, 3),
-                "texture": round(texture_sim, 3)
+                "semantic": round(semantic_sim, 3),
+                "design": round(design_sim or 0.0, 3),
+                "color": round(color_sim or 0.0, 3),
+                "texture": round(texture_sim or 0.0, 3),
             }
-            
+
             try:
-                # 1. URL for original file (view)
                 image_url = presigned_url(key)
-                
-                # 2. URL for download (always the original file)
-                filename = key.split('/')[-1]
+                filename = key.split("/")[-1]
                 download_url = presigned_download_url(key, filename)
-                
-                # 3. URL for thumbnail (always use lightweight .thumbnails/ version)
-                thumb_key = f".thumbnails/{key}.png"
                 try:
                     thumbnail_url = presigned_url(thumb_key)
-                    
-                    # For AI/PDF files, use thumbnail as the "view" URL
-                    # since browsers can't render .ai files and may auto-download them
-                    if key.lower().endswith(('.ai', '.pdf')):
+                    if key.lower().endswith((".ai", ".pdf")):
                         image_url = thumbnail_url
                 except Exception:
-                    thumbnail_url = image_url  # Fallback to full image
-
+                    thumbnail_url = image_url
             except Exception as e:
                 print(f"Error generating presigned URL for {key}: {e}")
-                
-            # If sub-part localization is requested and similarity > 50%, find bounding box
-            if query_image_for_explain and similarity >= 0.50:
+
+            if (
+                effective_search_settings["enable_sub_part_localization"]
+                and query_image_for_explain
+                and similarity >= 0.50
+            ):
                 try:
-                    # Download lightweight thumbnail for faster CV processing
                     target_bytes = download_object(thumb_key) if thumbnail_url != image_url else download_object(key)
                     target_image = ImagePreprocessor.process(target_bytes, "target")
                     bounding_box = find_subimage_bounding_box(query_image_for_explain, target_image)
@@ -463,7 +571,7 @@ async def search_image(
                 "download_url": download_url,
                 "similarity_scores": similarity_scores,
                 "file_size": file_size,
-                "bounding_box": bounding_box
+                "bounding_box": bounding_box,
             })
     finally:
         db.close()
@@ -474,7 +582,8 @@ async def search_image(
         "page": page,
         "page_size": page_size,
         "has_more": (offset + len(results)) < total_results,
-        "total_results": total_results
+        "total_results": total_results,
+        "search_settings": effective_search_settings,
     }
 
 
