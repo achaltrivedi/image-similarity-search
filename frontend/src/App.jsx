@@ -7,6 +7,7 @@ import { ModeToggle } from '@/components/ModeToggle';
 // Pages
 import Home from '@/pages/Home';
 import Data from '@/pages/Data';
+import Settings from '@/pages/Settings';
 
 function App() {
   const location = useLocation();
@@ -35,6 +36,9 @@ function App() {
                 <NavLink to="/data" className={navLinkClass}>
                   Data
                 </NavLink>
+                <NavLink to="/settings" className={navLinkClass}>
+                  Settings
+                </NavLink>
               </nav>
             </div>
             <div className="flex items-center gap-2">
@@ -51,6 +55,9 @@ function App() {
         </div>
         <div style={{ display: location.pathname === '/data' ? 'block' : 'none' }}>
           <Data />
+        </div>
+        <div style={{ display: location.pathname === '/settings' ? 'block' : 'none' }}>
+          <Settings />
         </div>
       </main>
     </div>
