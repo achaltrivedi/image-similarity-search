@@ -1,5 +1,5 @@
 import os
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, func, text
+from sqlalchemy import Boolean, Float, create_engine, Column, Integer, String, DateTime, func, text
 from sqlalchemy.orm import sessionmaker, declarative_base
 from sqlalchemy.dialects.postgresql import JSONB
 from pgvector.sqlalchemy import Vector
@@ -37,6 +37,21 @@ class ImageEmbedding(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     minio_metadata = Column(JSONB, nullable=True)
 
+class SearchSettings(Base):
+    __tablename__ = "search_settings"
+
+    id = Column(Integer, primary_key=True, index=True)
+    settings_key = Column(String, unique=True, nullable=False, default="search")
+    default_results_per_page = Column(Integer, nullable=False, default=50)
+    similarity_threshold = Column(Float, nullable=False, default=0.0)
+    semantic_weight = Column(Float, nullable=False, default=0.55)
+    design_weight = Column(Float, nullable=False, default=0.20)
+    color_weight = Column(Float, nullable=False, default=0.15)
+    texture_weight = Column(Float, nullable=False, default=0.10)
+    enable_sub_part_localization = Column(Boolean, nullable=False, default=True)
+    bounding_box_effect = Column(String, nullable=False, default="scanner")
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
 def init_db():
     try:
         # 1. Ensure the vector extension is installed
@@ -64,6 +79,54 @@ def init_db():
             ADD COLUMN IF NOT EXISTS texture_embedding vector(64);
             """
             conn.execute(text(alter_sql))
+            
+            settings_sql = """
+            CREATE TABLE IF NOT EXISTS search_settings (
+                id SERIAL PRIMARY KEY,
+                settings_key VARCHAR UNIQUE NOT NULL DEFAULT 'search',
+                default_results_per_page INTEGER NOT NULL DEFAULT 50,
+                similarity_threshold DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+                semantic_weight DOUBLE PRECISION NOT NULL DEFAULT 0.55,
+                design_weight DOUBLE PRECISION NOT NULL DEFAULT 0.20,
+                color_weight DOUBLE PRECISION NOT NULL DEFAULT 0.15,
+                texture_weight DOUBLE PRECISION NOT NULL DEFAULT 0.10,
+                enable_sub_part_localization BOOLEAN NOT NULL DEFAULT TRUE,
+                bounding_box_effect VARCHAR NOT NULL DEFAULT 'scanner',
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+            """
+            conn.execute(text(settings_sql))
+
+            settings_alter_sql = """
+            ALTER TABLE search_settings
+            ADD COLUMN IF NOT EXISTS default_results_per_page INTEGER NOT NULL DEFAULT 50,
+            ADD COLUMN IF NOT EXISTS similarity_threshold DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+            ADD COLUMN IF NOT EXISTS semantic_weight DOUBLE PRECISION NOT NULL DEFAULT 0.55,
+            ADD COLUMN IF NOT EXISTS design_weight DOUBLE PRECISION NOT NULL DEFAULT 0.20,
+            ADD COLUMN IF NOT EXISTS color_weight DOUBLE PRECISION NOT NULL DEFAULT 0.15,
+            ADD COLUMN IF NOT EXISTS texture_weight DOUBLE PRECISION NOT NULL DEFAULT 0.10,
+            ADD COLUMN IF NOT EXISTS enable_sub_part_localization BOOLEAN NOT NULL DEFAULT TRUE,
+            ADD COLUMN IF NOT EXISTS bounding_box_effect VARCHAR NOT NULL DEFAULT 'scanner',
+            ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+            """
+            conn.execute(text(settings_alter_sql))
+
+            seed_settings_sql = """
+            INSERT INTO search_settings (
+                settings_key,
+                default_results_per_page,
+                similarity_threshold,
+                semantic_weight,
+                design_weight,
+                color_weight,
+                texture_weight,
+                enable_sub_part_localization,
+                bounding_box_effect
+            )
+            VALUES ('search', 50, 0.0, 0.55, 0.20, 0.15, 0.10, TRUE, 'scanner')
+            ON CONFLICT (settings_key) DO NOTHING;
+            """
+            conn.execute(text(seed_settings_sql))
 
             # Create HNSW index for high-performance search at 300k+ scale (semantic)
             index_sql_clip = """
