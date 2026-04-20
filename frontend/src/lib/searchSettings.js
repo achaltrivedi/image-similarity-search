@@ -58,7 +58,7 @@ export function normalizeSearchSettings(payload = {}) {
     default_results_per_page: Math.round(
       clampNumber(
         payload.default_results_per_page,
-        1,
+        0,
         100,
         defaults.default_results_per_page,
       ),
