@@ -334,6 +334,7 @@ async def search_image(
         search_overrides,
     )
     page_size = effective_search_settings["default_results_per_page"]
+    unpaginated_results = page_size == 0
 
     if embedder is None:
         print("Loading embedder lazily...")
@@ -361,6 +362,7 @@ async def search_image(
                         {"default_results_per_page": requested_page_size},
                     )
                 page_size = effective_search_settings["default_results_per_page"]
+                unpaginated_results = page_size == 0
         except Exception as e:
             return JSONResponse(
                 status_code=503,
@@ -516,8 +518,12 @@ async def search_image(
         all_matches.sort(key=lambda item: (item[1], item[2]), reverse=True)
 
         total_results = len(all_matches)
-        offset = (page - 1) * page_size
-        page_matches = all_matches[offset:offset + page_size]
+        if unpaginated_results:
+            offset = 0
+            page_matches = all_matches
+        else:
+            offset = (page - 1) * page_size
+            page_matches = all_matches[offset:offset + page_size]
 
         print(
             f"Search page {page}: {len(page_matches)} results "
@@ -581,7 +587,7 @@ async def search_image(
         "query_id": query_id,
         "page": page,
         "page_size": page_size,
-        "has_more": (offset + len(results)) < total_results,
+        "has_more": False if unpaginated_results else (offset + len(results)) < total_results,
         "total_results": total_results,
         "search_settings": effective_search_settings,
     }
