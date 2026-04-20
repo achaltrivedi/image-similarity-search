@@ -140,7 +140,7 @@ export default function Settings() {
                 </label>
                 <Input
                   type='number'
-                  min='1'
+                  min='0'
                   max='100'
                   value={draft.default_results_per_page}
                   onChange={(event) =>
@@ -151,7 +151,7 @@ export default function Settings() {
                   }
                 />
                 <p className='text-xs text-muted-foreground'>
-                  Controls how many matches load in the first search page.
+                  Set `0` to return all matches at once. Positive values keep paginated infinite scroll.
                 </p>
               </div>
 
