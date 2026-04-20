@@ -28,10 +28,30 @@ import {
 } from '@/lib/searchSettings';
 
 const WEIGHT_FIELDS = [
-  { key: 'semantic', label: 'Semantic', accent: 'bg-emerald-500' },
-  { key: 'design', label: 'Design', accent: 'bg-sky-500' },
-  { key: 'color', label: 'Color', accent: 'bg-amber-500' },
-  { key: 'texture', label: 'Texture', accent: 'bg-fuchsia-500' },
+  {
+    key: 'semantic',
+    label: 'Semantic',
+    accent: 'bg-emerald-500',
+    description: 'Matches the overall subject or visual meaning of the image.',
+  },
+  {
+    key: 'design',
+    label: 'Design',
+    accent: 'bg-sky-500',
+    description: 'Focuses on layout, structure, shapes, and composition.',
+  },
+  {
+    key: 'color',
+    label: 'Color',
+    accent: 'bg-amber-500',
+    description: 'Compares the color palette and where colors appear in the image.',
+  },
+  {
+    key: 'texture',
+    label: 'Texture',
+    accent: 'bg-fuchsia-500',
+    description: 'Looks at surface detail, smoothness, roughness, and repeated patterns.',
+  },
 ];
 
 const BOUNDING_BOX_OPTIONS = [
@@ -151,7 +171,7 @@ export default function Settings() {
                   }
                 />
                 <p className='text-xs text-muted-foreground'>
-                  Set `0` to return all matches at once. Positive values keep paginated infinite scroll.
+                  Set `0` to return all matches. Any positive value limits the search to the top `N` matches.
                 </p>
               </div>
 
@@ -224,14 +244,19 @@ export default function Settings() {
               </div>
 
               <div className='space-y-4'>
-                {WEIGHT_FIELDS.map(({ key, label, accent }) => (
+                {WEIGHT_FIELDS.map(({ key, label, accent, description }) => (
                   <div key={key} className='space-y-2'>
-                    <div className='flex items-center justify-between gap-3'>
-                      <div className='flex items-center gap-2'>
-                        <span className={cn('h-2.5 w-2.5 rounded-full', accent)} />
-                        <span className='text-sm font-medium text-foreground'>
-                          {label}
-                        </span>
+                    <div className='flex items-start justify-between gap-3'>
+                      <div>
+                        <div className='flex items-center gap-2'>
+                          <span className={cn('h-2.5 w-2.5 rounded-full', accent)} />
+                          <span className='text-sm font-medium text-foreground'>
+                            {label}
+                          </span>
+                        </div>
+                        <p className='mt-1 text-xs text-muted-foreground'>
+                          {description}
+                        </p>
                       </div>
                       <Badge variant='outline'>
                         {formatPercent(normalizedDraft.weights[key])}
