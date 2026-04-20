@@ -49,7 +49,7 @@ def normalize_search_settings(payload: dict | None) -> dict:
         payload.get("default_results_per_page"),
         defaults["default_results_per_page"],
     )
-    page_size = max(1, min(100, page_size))
+    page_size = max(0, min(100, page_size))
 
     threshold = _coerce_float(
         payload.get("similarity_threshold"),
