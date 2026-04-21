@@ -7,6 +7,7 @@ from core.embedding import ImageEmbedder
 from core.preprocessor import ImagePreprocessor
 from core.design_features import extract_design_features
 from core.color_texture_features import extract_color_features, extract_texture_features
+from core.image_metadata import extract_image_metadata
 from utils.minio_config import BUCKET_NAME
 from utils.minio_utils import SUPPORTED_IMAGE_EXTENSIONS, download_object, upload_object
 
@@ -111,7 +112,7 @@ def process_minio_record(record: dict) -> dict:
             existing.design_embedding = design_vec
             existing.color_embedding = color_vec
             existing.texture_embedding = texture_vec
-            existing.minio_metadata = {"file_size": file_size}
+            existing.minio_metadata = extract_image_metadata(image, object_key, file_size)
         else:
             db.add(ImageEmbedding(
                 object_key=object_key,
@@ -119,7 +120,7 @@ def process_minio_record(record: dict) -> dict:
                 design_embedding=design_vec,
                 color_embedding=color_vec,
                 texture_embedding=texture_vec,
-                minio_metadata={"file_size": file_size}
+                minio_metadata=extract_image_metadata(image, object_key, file_size)
             ))
         db.commit()
         
