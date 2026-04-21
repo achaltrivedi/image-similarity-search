@@ -24,6 +24,8 @@ from utils.minio_utils import get_bucket_keys, presigned_url, presigned_download
 from utils.minio_config import BUCKET_NAME
 from core.localization import find_subimage_bounding_box
 from core.preprocessor import ImagePreprocessor
+from core.image_metadata import extract_image_metadata
+from core.ranking import apply_precision_ranking
 from fastapi import Request
 from core.task_queue import enqueue_minio_record, queue_health, enqueue_full_sync
 from core.database import SessionLocal, ImageEmbedding, SearchSettings, init_db
@@ -302,6 +304,7 @@ async def search_image(
     query_design_vector = None
     query_color = None
     query_texture = None
+    query_metadata = None
     query_image_for_explain = None
     requested_page_size = page_size
 
@@ -346,6 +349,7 @@ async def search_image(
             cached_data = r.get(f"query:{query_id}")
             cached_image = r.get(f"query_image:{query_id}")
             cached_settings = r.get(f"query_settings:{query_id}")
+            cached_metadata = r.get(f"query_metadata:{query_id}")
             if cached_image:
                 try:
                     query_image_for_explain = ImagePreprocessor.process(
@@ -363,6 +367,8 @@ async def search_image(
                     )
                 page_size = effective_search_settings["default_results_per_page"]
                 unlimited_results = page_size == 0
+            if cached_metadata:
+                query_metadata = json.loads(cached_metadata)
         except Exception as e:
             return JSONResponse(
                 status_code=503,
@@ -404,10 +410,12 @@ async def search_image(
             query_design_vector = extract_design_features(image)
             query_color = extract_color_features(image)
             query_texture = extract_texture_features(image)
+            query_metadata = extract_image_metadata(image, file.filename, len(image_bytes))
         except Exception:
             query_design_vector = None
             query_color = None
             query_texture = None
+            query_metadata = None
 
         query_id = hashlib.md5(image_bytes).hexdigest()
         try:
@@ -421,6 +429,8 @@ async def search_image(
                 r.setex(f"query_color:{query_id}", 300, json.dumps(query_color))
             if query_texture:
                 r.setex(f"query_texture:{query_id}", 300, json.dumps(query_texture))
+            if query_metadata:
+                r.setex(f"query_metadata:{query_id}", 300, json.dumps(query_metadata))
         except Exception as e:
             print(f"Warning: Failed to cache query in Redis: {e}")
 
@@ -444,6 +454,10 @@ async def search_image(
             cached_t = r.get(f"query_texture:{query_id}")
             if cached_t:
                 query_texture = json.loads(cached_t)
+
+            cached_m = r.get(f"query_metadata:{query_id}")
+            if cached_m:
+                query_metadata = json.loads(cached_m)
         except Exception:
             query_color = None
             query_texture = None
@@ -498,21 +512,35 @@ async def search_image(
                 },
                 effective_search_settings["weights"],
             )
-            if combined_similarity < effective_search_settings["similarity_threshold"]:
+            similarity_scores_for_ranking = {
+                "semantic": semantic_sim,
+                "design": design_sim,
+                "color": color_sim,
+                "texture": texture_sim,
+            }
+            metadata = row.minio_metadata if hasattr(row, "minio_metadata") and row.minio_metadata else {}
+            ranking = apply_precision_ranking(
+                combined_similarity,
+                similarity_scores_for_ranking,
+                metadata,
+                query_metadata,
+            )
+            if ranking["similarity"] < effective_search_settings["similarity_threshold"]:
                 continue
 
             file_size = None
-            if hasattr(row, "minio_metadata") and row.minio_metadata:
-                file_size = row.minio_metadata.get("file_size")
+            if metadata:
+                file_size = metadata.get("file_size")
 
             all_matches.append((
                 row.object_key,
-                combined_similarity,
+                ranking["similarity"],
                 semantic_sim,
                 design_sim,
                 color_sim,
                 texture_sim,
                 file_size,
+                ranking,
             ))
 
         all_matches.sort(key=lambda item: (item[1], item[2]), reverse=True)
@@ -532,7 +560,7 @@ async def search_image(
         )
 
         results = []
-        for key, similarity, semantic_sim, design_sim, color_sim, texture_sim, file_size in page_matches:
+        for key, similarity, semantic_sim, design_sim, color_sim, texture_sim, file_size, ranking in page_matches:
             image_url = None
             thumbnail_url = None
             download_url = None
@@ -577,6 +605,13 @@ async def search_image(
                 "thumbnail_url": thumbnail_url,
                 "download_url": download_url,
                 "similarity_scores": similarity_scores,
+                "base_similarity": round(ranking["base_similarity"], 3),
+                "match_confidence": ranking["match_confidence"],
+                "rank_reason": ranking["rank_reason"],
+                "rank_adjustments": {
+                    "boosts": ranking["boosts"],
+                    "penalties": ranking["penalties"],
+                },
                 "file_size": file_size,
                 "bounding_box": bounding_box,
             })
