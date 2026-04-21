@@ -17,7 +17,11 @@ import SearchBox from '@/components/SearchBox';
 // API
 import { searchImage, searchNextPage, syncBucket } from '@/api/searchService';
 import { useSearchSettings } from '@/context/SearchSettingsContext';
-import { DEFAULT_SEARCH_SETTINGS } from '@/lib/searchSettings';
+import {
+  DEFAULT_SEARCH_SETTINGS,
+  SEARCH_PRESETS,
+  applySearchPreset,
+} from '@/lib/searchSettings';
 
 function Home() {
   const [results, setResults] = useState([]);
@@ -29,8 +33,13 @@ function Home() {
   const [totalResults, setTotalResults] = useState(0);
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState(null);
+  const [searchProfile, setSearchProfile] = useState('custom');
   const { settings } = useSearchSettings();
-  const effectiveSettings = settings || DEFAULT_SEARCH_SETTINGS;
+  const savedSettings = settings || DEFAULT_SEARCH_SETTINGS;
+  const effectiveSettings =
+    searchProfile === 'custom'
+      ? savedSettings
+      : applySearchPreset(savedSettings, searchProfile);
 
   const handleSearch = async (file) => {
     setLoading(true);
@@ -110,6 +119,26 @@ function Home() {
 
       {/* Search Box */}
       <div className="mb-8">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card px-4 py-3 shadow-sm">
+          <div>
+            <p className="text-sm font-semibold text-foreground">Search Profile</p>
+            <p className="text-xs text-muted-foreground">
+              Use a preset for this search without changing saved settings.
+            </p>
+          </div>
+          <select
+            value={searchProfile}
+            onChange={(event) => setSearchProfile(event.target.value)}
+            className="rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none transition-colors focus:border-primary"
+          >
+            <option value="custom">Saved Settings</option>
+            {Object.entries(SEARCH_PRESETS).map(([key, preset]) => (
+              <option key={key} value={key}>
+                {preset.label}
+              </option>
+            ))}
+          </select>
+        </div>
         <SearchBox onSearch={handleSearch} loading={loading} />
       </div>
 
