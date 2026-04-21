@@ -2,6 +2,7 @@ import { useId } from 'react';
 import {
   Eye,
   Download,
+  Brain,
   Ruler,
   Palette,
   Layers,
@@ -13,6 +14,12 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardFooter } from '@/components/ui/card';
 
 const SCORE_CONFIG = [
+  {
+    key: 'semantic',
+    label: 'Semantic',
+    icon: <Brain className='w-3.5 h-3.5 md:w-4 md:h-4' />,
+    color: 'sky',
+  },
   {
     key: 'design',
     label: 'Design',
@@ -34,15 +41,23 @@ const SCORE_CONFIG = [
 ];
 
 const BAR_COLORS = {
+  sky: 'bg-sky-500',
   emerald: 'bg-emerald-500',
   blue: 'bg-blue-500',
   purple: 'bg-purple-500',
 };
 
 const LABEL_COLORS = {
+  sky: 'text-sky-600 dark:text-sky-400',
   emerald: 'text-emerald-600 dark:text-emerald-400',
   blue: 'text-blue-600 dark:text-blue-400',
   purple: 'text-purple-600 dark:text-purple-400',
+};
+
+const CONFIDENCE_STYLES = {
+  high: 'bg-emerald-600 text-white',
+  medium: 'bg-amber-500 text-white',
+  low: 'bg-slate-600 text-white',
 };
 
 function buildScannerGeometry(points) {
@@ -117,6 +132,8 @@ export default function ResultCard({
   const filename = result.image_key?.split('/').pop() || 'Unknown';
   const similarity = (result.similarity * 100).toFixed(1);
   const scores = result.similarity_scores || {};
+  const confidence = result.match_confidence || 'medium';
+  const rankReason = result.rank_reason || 'Visual similarity match';
   const scannerGeometry = buildScannerGeometry(result.bounding_box);
   const hasBoundingBox = Boolean(scannerGeometry) && boundingBoxEffect !== 'off';
   const showScanner = hasBoundingBox && boundingBoxEffect === 'scanner';
@@ -458,6 +475,20 @@ export default function ResultCard({
               </div>
             );
           })}
+        </div>
+
+        <div className='rounded-lg border border-border/70 bg-muted/30 p-3'>
+          <div className='flex items-center justify-between gap-2'>
+            <span className='text-xs font-semibold text-foreground'>
+              Why this matched
+            </span>
+            <Badge className={CONFIDENCE_STYLES[confidence] || CONFIDENCE_STYLES.medium}>
+              {confidence} confidence
+            </Badge>
+          </div>
+          <p className='mt-1 text-xs leading-5 text-muted-foreground'>
+            {rankReason}
+          </p>
         </div>
       </CardContent>
       {/* Action Buttons */}
