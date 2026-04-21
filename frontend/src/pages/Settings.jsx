@@ -24,6 +24,7 @@ import { cn } from '@/lib/utils';
 import { useSearchSettings } from '@/context/SearchSettingsContext';
 import {
   DEFAULT_SEARCH_SETTINGS,
+  SEARCH_PRESETS,
   normalizeSearchSettings,
 } from '@/lib/searchSettings';
 
@@ -112,6 +113,21 @@ export default function Settings() {
 
   const handleReset = () => {
     setDraft(settings);
+  };
+
+  const handlePresetApply = (presetKey) => {
+    const preset = SEARCH_PRESETS[presetKey];
+    if (!preset) return;
+    setDraft((current) =>
+      normalizeSearchSettings({
+        ...current,
+        ...preset.settings,
+        weights: {
+          ...current.weights,
+          ...(preset.settings.weights || {}),
+        },
+      }),
+    );
   };
 
   return (
@@ -233,6 +249,34 @@ export default function Settings() {
             </div>
 
             <div className='space-y-4'>
+              <div className='rounded-xl border border-border/70 bg-muted/20 p-4'>
+                <div>
+                  <h3 className='text-sm font-semibold text-foreground'>
+                    Search Presets
+                  </h3>
+                  <p className='mt-1 text-xs text-muted-foreground'>
+                    Start with a profile, then fine-tune the sliders if needed.
+                  </p>
+                </div>
+                <div className='mt-4 grid gap-2 md:grid-cols-2'>
+                  {Object.entries(SEARCH_PRESETS).map(([key, preset]) => (
+                    <button
+                      key={key}
+                      type='button'
+                      onClick={() => handlePresetApply(key)}
+                      className='rounded-xl border border-border bg-background p-3 text-left transition-colors hover:border-primary/50 hover:bg-accent/30'
+                    >
+                      <div className='text-sm font-semibold text-foreground'>
+                        {preset.label}
+                      </div>
+                      <p className='mt-1 text-xs leading-5 text-muted-foreground'>
+                        {preset.description}
+                      </p>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
               <div>
                 <h3 className='text-sm font-semibold text-foreground'>
                   Search Mode Weights
