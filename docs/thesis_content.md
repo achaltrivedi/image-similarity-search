@@ -56,6 +56,7 @@ This document provides a highly structured, technical, and comprehensive breakdo
         4.  *Texture (`texture_embedding`, 64D):* Grayscale Histogram.
     *   **Format Negotiation:** How the `ImagePreprocessor` handles proprietary formats like `.ai` and `.pdf`, rendering them to RGB in-memory before inference.
     *   **Data Retrieval:** Explain PostgreSQL's native `cosine_distance()` combined with HNSW indexes for sub-millisecond retrieval. Mention the WebSocket implementation for live UI updates.
+    *   **Settings Page & Search Presets:** Discuss the dedicated Settings UI that allows users to adjust the weighting of the four vectors dynamically. Explain how predefined "Presets" (e.g., "Semantic Focus", "Color Match", "Strict Layout") interact with the backend API to alter the final distance calculation algorithm, giving the user unprecedented control over search behavior without needing code changes.
 
 ---
 
@@ -66,7 +67,7 @@ This document provides a highly structured, technical, and comprehensive breakdo
     *   **Performance Optimization:** Discuss the migration from pure PyTorch to ONNX Runtime. Detail how inference speed improved drastically (from >500ms down to ~100-200ms per image on CPU), and how removing the `torch` dependency shrunk the Docker image footprint.
     *   **Scalability & Stability:** Discuss the implementation of batched processing and threading Semaphores that prevented Out-Of-Memory (OOM) crashes during the massive ingestion of 300,000+ assets.
     *   **Search Granularity:** Discuss how the UI allows users to view the separated parameter-wise scores (semantics vs. color vs. texture). Explain how this multi-vector approach provides significantly higher precision for graphic designers than a pure CLIP semantic search.
-    *   **UI/UX Latency:** Detail the success of WebSockets and the Redis-backed bucket cache for immediate visual feedback on deletions and uploads without heavy database locking.
+    *   **UI/UX Latency & Customization:** Detail the success of WebSockets and the Redis-backed bucket cache for immediate visual feedback on deletions and uploads without heavy database locking. Highlight how the Settings page and Search Presets directly resolved user frustration by allowing them to instantly shift the search algorithm from a broad semantic query to a strict color or layout-based query depending on their immediate need.
 
 ---
 
@@ -102,3 +103,61 @@ To make your thesis visually impactful, you need high-quality architecture diagr
 
 **Prompt 3: For the Real-Time Ingestion Sequence Diagram (Mermaid.js)**
 > "Generate a Mermaid.js sequence diagram showing the real-time ingestion flow. The actors are: User, MinIO Storage, Worker Event Listener, Redis Queue, Worker Processor, and PostgreSQL. The user uploads a file to MinIO. MinIO triggers an s3:ObjectCreated event to the Event Listener. The listener pushes a job to Redis. The Worker Processor pulls the job, downloads the image from MinIO, computes embeddings, and inserts the data into PostgreSQL. Finally, the Worker Processor sends a WebSocket update to the User's UI."
+
+---
+
+## 6. Reference Tables
+
+### 6.1 Multi-Vector Embedding Specifications
+This table outlines the four distinct embedding models utilized during the ingestion pipeline to allow parameter-wise matching.
+
+| Embedding Vector | Dimensions | Model / Method | Primary Purpose |
+| :--- | :--- | :--- | :--- |
+| **`embedding`** | 768D | CLIP ViT-B/32 (ONNX) | Semantic & conceptual similarity |
+| **`design_embedding`** | 256D | Canny Edge Density Grid | Structural layout and composition |
+| **`color_embedding`** | 256D | HSV Histogram (Mean-Centered)| Strict color palette matching |
+| **`texture_embedding`** | 64D | Grayscale Histogram | Surface texture and granularity |
+
+### 6.2 Microservices Architecture Services
+This table details the discrete services running via Docker Compose in the production architecture.
+
+| Service | Port | Description |
+| :--- | :--- | :--- |
+| **FastAPI Backend** | 8000 | Core Search API, webhook handler, and WebSocket broadcasting |
+| **React Frontend** | 5173 (Dev) / 80 (Prod) | UI built with Vite, React, and ShadCN |
+| **PostgreSQL** | 5434 | Primary database running the `pgvector` extension with HNSW indexes |
+| **Redis** | 6379 | Job queuing system (RQ) and WebSocket Pub/Sub state manager |
+| **MinIO API** | 9000 | S3-compatible object storage layer |
+| **MinIO Console** | 9001 | MinIO Web Administration UI |
+
+### 6.3 Supported Asset Formats
+The system ingests and processes multiple graphic formats, negotiating them in-memory.
+
+| Format | Processing Method | Feature Extraction Support |
+| :--- | :--- | :--- |
+| **.PNG / .JPEG / .WEBP** | Native RGB processing | Semantics, Color, Texture, Design |
+| **.PDF** | First-page rendering at 300 DPI | Semantics, Color, Texture, Design |
+| **.AI (Adobe Illustrator)** | PostScript/PDF extraction to raster | Semantics, Color, Texture, Design |
+| **.GIF / .TIFF / .BMP** | Frame 1 extraction, format normalization | Semantics, Color, Texture, Design |
+
+---
+
+## 7. Abbreviations and Acronyms
+
+*   **ANN**: Approximate Nearest Neighbor
+*   **API**: Application Programming Interface
+*   **CBIR**: Content-Based Image Retrieval
+*   **CLIP**: Contrastive Language-Image Pre-training (OpenAI)
+*   **CNN**: Convolutional Neural Network
+*   **HNSW**: Hierarchical Navigable Small World (Vector Indexing Algorithm)
+*   **HOG**: Histogram of Oriented Gradients
+*   **HSV**: Hue, Saturation, Value (Color space)
+*   **ONNX**: Open Neural Network Exchange
+*   **OOM**: Out of Memory
+*   **RQ**: Redis Queue
+*   **S3**: Simple Storage Service (AWS standard, utilized via MinIO)
+*   **SDK**: Software Development Kit
+*   **SIFT**: Scale-Invariant Feature Transform
+*   **SPA**: Single Page Application
+*   **TTL**: Time To Live
+*   **UI/UX**: User Interface / User Experience
